@@ -93,7 +93,7 @@ async function loop(timestamp) {
   if (!allLandmarks) {
     noFootFrames++;
     if (noFootFrames > NO_FOOT_THRESHOLD) {
-      setStatus('Sin detección — apunta la cámara hacia tus pies (pie completo visible)');
+      setStatus('Aleja la cámara ~1 metro y muestra pie + pierna completa en cuadro');
     }
     renderFrame();
     requestAnimationFrame(loop);

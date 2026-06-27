@@ -32,7 +32,7 @@ async function initPose(wasmPath = 'https://cdn.jsdelivr.net/npm/@mediapipe/task
   poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
     baseOptions: {
       modelAssetPath:
-        'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+        'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task',
       delegate: 'GPU',
     },
     runningMode:        'VIDEO',
