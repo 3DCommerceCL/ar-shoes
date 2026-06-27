@@ -49,6 +49,7 @@ async function init() {
   setStatus('Cargando MediaPipe…');
   await withTimeout(initPose(), 30000, 'MediaPipe')
     .catch(e => console.warn('[app] pose init falló:', e.message));
+  setStatus('MediaPipe listo ✓');
 
   setStatus('Cargando profundidad (opcional)…');
   await withTimeout(initDepth(), 25000, 'MiDaS')
@@ -92,7 +93,7 @@ async function loop(timestamp) {
   if (!allLandmarks) {
     noFootFrames++;
     if (noFootFrames > NO_FOOT_THRESHOLD) {
-      setStatus('Apunta la cámara hacia tus pies');
+      setStatus('Sin detección — apunta la cámara hacia tus pies (pie completo visible)');
     }
     renderFrame();
     requestAnimationFrame(loop);
@@ -117,7 +118,7 @@ async function loop(timestamp) {
     return;
   }
 
-  setStatus('Calzado detectado ✓');
+  setStatus('Pie detectado — renderizando zapato…');
 
   // E. Profundidad MiDaS (cada N frames)
   if (frameCount % DEPTH_EVERY === 0) {

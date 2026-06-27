@@ -37,9 +37,9 @@ async function initPose(wasmPath = 'https://cdn.jsdelivr.net/npm/@mediapipe/task
     },
     runningMode:        'VIDEO',
     numPoses:           1,
-    minPoseDetectionConfidence: 0.5,
-    minPosePresenceConfidence:  0.5,
-    minTrackingConfidence:      0.5,
+    minPoseDetectionConfidence: 0.3,
+    minPosePresenceConfidence:  0.3,
+    minTrackingConfidence:      0.3,
   });
 
   console.log('[pose] MediaPipe PoseLandmarker listo');
@@ -69,7 +69,7 @@ function extractFootLandmarks(allLandmarks, side = 'left') {
 
   // Verificar visibilidad mínima
   const minVis = Math.min(...lms.map(l => l.visibility ?? 0));
-  if (minVis < 0.4) return null;
+  if (minVis < 0.15) return null;
 
   return {
     heel:   allLandmarks[idx[0]],
