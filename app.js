@@ -118,7 +118,7 @@ async function loop(timestamp) {
     return;
   }
 
-  setStatus('Pie detectado — renderizando zapato…');
+  setStatus(`Pie ${currentSide} detectado ✓ heel:(${footLms.heel.x.toFixed(2)},${footLms.heel.y.toFixed(2)})`);
 
   // E. Profundidad MiDaS (cada N frames)
   if (frameCount % DEPTH_EVERY === 0) {
