@@ -112,38 +112,38 @@ function buildOccluder(THREE) {
   scene.add(occluderMesh);
 }
 
-// Actualizar posición y escala del zapato en cada frame
-// pose: { R, t, scaleFactor } de solver.js
-// videoW, videoH: dimensiones del video
-function updateShoeTransform(pose, videoW, videoH) {
-  if (!shoeModel || !pose) {
+// Actualizar posición y escala del zapato usando landmarks 2D directamente
+// footLandmarks: { heel, toe, ankle } con coords normalizadas [0,1]
+function updateShoeTransform(footLandmarks, scaleFactor = 1) {
+  if (!shoeModel || !footLandmarks) {
     if (shoeModel) shoeModel.visible = false;
     return;
   }
 
   shoeModel.visible = true;
 
-  const { t, R, scaleFactor = 1 } = pose;
+  // Convertir landmarks normalizados [0,1] a NDC [-1,1]
+  const hx = footLandmarks.heel.x * 2 - 1;
+  const hy = -(footLandmarks.heel.y * 2 - 1);
+  const tx = footLandmarks.toe.x  * 2 - 1;
+  const ty = -(footLandmarks.toe.y  * 2 - 1);
 
-  // Convertir traslación de coordenadas de cámara a NDC [-1,1]
-  const nx = (t[0] / videoW) * 2 - 1;
-  const ny = -(t[1] / videoH) * 2 + 1;
-  const nz = -t[2] / 200; // profundidad normalizada
+  // Centro entre talón y punta
+  const cx = (hx + tx) / 2;
+  const cy = (hy + ty) / 2;
 
-  shoeModel.position.set(nx, ny, nz);
+  // Ángulo del pie en pantalla
+  const angle = Math.atan2(ty - hy, tx - hx);
 
-  // Aplicar rotación desde la matriz R
-  const m = new THREE_ref.Matrix4().set(
-    R[0][0], R[0][1], R[0][2], 0,
-    R[1][0], R[1][1], R[1][2], 0,
-    R[2][0], R[2][1], R[2][2], 0,
-    0,       0,       0,       1
-  );
-  shoeModel.quaternion.setFromRotationMatrix(m);
+  // Longitud del pie en NDC → escala del zapato
+  const footLen = Math.sqrt((tx - hx) ** 2 + (ty - hy) ** 2);
+  const scale   = footLen * 1.1 * scaleFactor;
 
-  // Escala: ajustar al tamaño del pie detectado
-  const baseScale = 0.3; // ajuste visual base
-  shoeModel.scale.setScalar(baseScale * scaleFactor);
+  shoeModel.position.set(cx, cy, 0.5);
+
+  // Rotar zapato: -90° en X para acostarlo, luego ángulo del pie en Z
+  shoeModel.rotation.set(-Math.PI / 2, 0, angle + Math.PI);
+  shoeModel.scale.setScalar(Math.max(scale, 0.05));
 }
 
 // Actualizar máscara de oclusión

@@ -132,11 +132,8 @@ async function loop(timestamp) {
   // G. Escala del zapato
   const scale = computeScaleFactor(footLms, depthMap, videoEl.videoWidth, videoEl.videoHeight);
 
-  // H. Pose 6DOF
-  const pose = solvePose(footLms, depthMap, videoEl.videoWidth, videoEl.videoHeight, scale);
-
-  // I. Actualizar posición del GLB
-  updateShoeTransform(pose, videoEl.videoWidth, videoEl.videoHeight);
+  // H. Actualizar posición del GLB directo desde landmarks 2D
+  updateShoeTransform(footLms, scale);
 
   // J. Render
   renderFrame();
