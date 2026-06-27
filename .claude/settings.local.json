@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(python --version 2>&1)",
+      "PowerShell(node --version 2>&1)",
+      "PowerShell(python3 --version 2>&1)",
+      "PowerShell(py --version 2>&1)",
+      "PowerShell(npx localtunnel --port 8080)",
+      "PowerShell(Get-Process -Name \"node\" -ErrorAction SilentlyContinue)",
+      "PowerShell(Stop-Process -Force)",
+      "PowerShell(gh --version 2>&1)",
+      "PowerShell(git -C \"c:\\\\Users\\\\Iga\\\\Documents\\\\ar-shoes\" config user.name 2>&1)",
+      "PowerShell(git -C \"c:\\\\Users\\\\Iga\\\\Documents\\\\ar-shoes\" config user.email 2>&1)"
+    ]
+  }
+}

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>AR Shoe Try-On</title>
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- Import map: resuelve 'three' y 'three/addons/' para el browser -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <!-- ONNX Runtime Web (para MiDaS) -->
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.3/dist/ort.min.js"></script>
+</head>
+<body>
+
+  <!-- Feed de cámara (oculto visualmente, usado como fuente por Three.js) -->
+  <video id="video" autoplay playsinline muted></video>
+
+  <!-- Canvas donde Three.js renderiza todo -->
+  <canvas id="canvas"></canvas>
+
+  <!-- UI overlay -->
+  <div id="ui">
+    <div id="status-bar">
+      <span id="status">Iniciando…</span>
+    </div>
+
+    <div id="controls">
+      <button id="btn-switch-foot" type="button">Pie izquierdo</button>
+
+      <div id="opacity-control">
+        <label for="slider-opacity">Opacidad</label>
+        <input
+          id="slider-opacity"
+          type="range"
+          min="0.1"
+          max="1"
+          step="0.05"
+          value="1"
+        />
+      </div>
+    </div>
+  </div>
+
+  <!-- Pantalla de carga -->
+  <div id="loading-screen">
+    <div class="spinner"></div>
+    <p id="loading-msg">Cargando visor AR…</p>
+  </div>
+
+  <!-- Overlay de error de permisos -->
+  <div id="permission-error" hidden>
+    <div class="error-box">
+      <p>Se necesita acceso a la cámara para usar el visor AR.</p>
+      <button onclick="location.reload()">Reintentar</button>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+
+  <script>
+    // Ocultar pantalla de carga cuando app.js haya terminado de cargar los modelos
+    window.addEventListener('ar-ready', () => {
+      document.getElementById('loading-screen').style.display = 'none';
+    });
+
+    // Disparar evento desde app.js cuando esté listo
+    // (app.js llama: window.dispatchEvent(new Event('ar-ready')) tras init)
+  </script>
+</body>
+</html>
