@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<title>Pipeline de Entrenamiento — AR Shoe Try-On</title>
+<style>
+  /* ---- Reset & Base ---- */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 11pt;
+    color: #1a1a2e;
+    background: #fff;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 48px;
+    line-height: 1.6;
+  }
+
+  /* ---- Portada ---- */
+  .cover {
+    text-align: center;
+    padding: 60px 0 48px;
+    border-bottom: 3px solid #0f3460;
+    margin-bottom: 40px;
+  }
+  .cover .logo { font-size: 56px; margin-bottom: 16px; }
+  .cover h1 {
+    font-size: 28pt;
+    font-weight: 800;
+    color: #0f3460;
+    line-height: 1.2;
+    margin-bottom: 12px;
+  }
+  .cover .subtitle {
+    font-size: 13pt;
+    color: #555;
+    margin-bottom: 24px;
+  }
+  .cover .badges { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+  .badge {
+    background: #e8f4fd;
+    color: #0f3460;
+    border: 1px solid #b8d4ed;
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 9pt;
+    font-weight: 600;
+  }
+  .badge.green  { background: #e8f9e8; color: #1a5c1a; border-color: #a8d8a8; }
+  .badge.orange { background: #fff3e0; color: #8b4000; border-color: #ffcc80; }
+
+  /* ---- Encabezados ---- */
+  h1 { font-size: 22pt; color: #0f3460; margin: 36px 0 12px; border-bottom: 2px solid #0f3460; padding-bottom: 6px; }
+  h2 { font-size: 15pt; color: #16213e; margin: 28px 0 10px; }
+  h3 { font-size: 12pt; color: #0f3460; margin: 20px 0 8px; }
+  p  { margin-bottom: 10px; }
+
+  /* ---- Diagrama de flujo ---- */
+  .flow {
+    background: linear-gradient(135deg, #0f3460 0%, #16213e 100%);
+    color: #fff;
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin: 24px 0;
+    font-family: 'Courier New', monospace;
+    font-size: 10pt;
+    line-height: 2.2;
+    text-align: center;
+  }
+  .flow .arrow { color: #4fc3f7; font-size: 14pt; }
+  .flow .highlight { color: #ffcc02; font-weight: bold; }
+  .flow .dim { opacity: 0.7; }
+
+  /* ---- Tablas ---- */
+  table { width: 100%; border-collapse: collapse; margin: 16px 0 24px; font-size: 10pt; }
+  th {
+    background: #0f3460;
+    color: #fff;
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 600;
+  }
+  td { padding: 8px 14px; border-bottom: 1px solid #e0e0e0; vertical-align: top; }
+  tr:nth-child(even) td { background: #f7f9fc; }
+  tr:last-child td { border-bottom: none; }
+  td .check { color: #2e7d32; font-weight: bold; }
+  td .warn  { color: #e65100; font-weight: bold; }
+
+  /* ---- Pasos numerados ---- */
+  .steps { counter-reset: step; margin: 20px 0; }
+  .step  {
+    counter-increment: step;
+    display: flex;
+    gap: 18px;
+    align-items: flex-start;
+    margin-bottom: 20px;
+    padding: 16px 20px;
+    background: #f7f9fc;
+    border-radius: 10px;
+    border-left: 4px solid #0f3460;
+  }
+  .step-num {
+    background: #0f3460;
+    color: #fff;
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800;
+    font-size: 13pt;
+    flex-shrink: 0;
+  }
+  .step-content h3 { margin: 0 0 4px; color: #0f3460; font-size: 11pt; }
+  .step-content p  { margin: 0; font-size: 10pt; color: #444; }
+
+  /* ---- Código ---- */
+  pre {
+    background: #1a1a2e;
+    color: #a8d8ea;
+    border-radius: 8px;
+    padding: 14px 18px;
+    font-family: 'Courier New', monospace;
+    font-size: 9pt;
+    line-height: 1.7;
+    overflow-x: auto;
+    margin: 12px 0 20px;
+  }
+  code { background: #e8eaf6; border-radius: 4px; padding: 2px 6px; font-family: 'Courier New', monospace; font-size: 9pt; color: #283593; }
+
+  /* ---- Tarjetas de costo ---- */
+  .cards { display: flex; gap: 16px; margin: 20px 0; flex-wrap: wrap; }
+  .card {
+    flex: 1 1 160px;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 18px 16px;
+    text-align: center;
+  }
+  .card .amount { font-size: 26pt; font-weight: 800; color: #0f3460; line-height: 1; }
+  .card .label  { font-size: 9pt; color: #666; margin-top: 4px; }
+  .card.highlight { background: #0f3460; border-color: #0f3460; }
+  .card.highlight .amount { color: #fff; }
+  .card.highlight .label  { color: #a8d0f0; }
+
+  /* ---- Alerta ---- */
+  .alert {
+    background: #fff8e1;
+    border-left: 4px solid #ffa000;
+    border-radius: 0 8px 8px 0;
+    padding: 12px 16px;
+    margin: 16px 0;
+    font-size: 10pt;
+  }
+  .alert strong { color: #e65100; }
+
+  /* ---- Métrica ---- */
+  .metrics { display: flex; gap: 12px; margin: 16px 0; flex-wrap: wrap; }
+  .metric {
+    flex: 1 1 140px;
+    background: #e8f4fd;
+    border-radius: 8px;
+    padding: 14px 12px;
+    text-align: center;
+  }
+  .metric .value { font-size: 18pt; font-weight: 800; color: #0f3460; }
+  .metric .name  { font-size: 8pt; color: #555; margin-top: 2px; }
+
+  /* ---- Print CSS ---- */
+  @media print {
+    body { padding: 20px 28px; max-width: 100%; font-size: 10pt; }
+    .cover { padding: 40px 0 32px; }
+    .cover h1 { font-size: 22pt; }
+    h1 { font-size: 16pt; }
+    h2 { font-size: 13pt; }
+    pre { font-size: 8pt; }
+    .cards, .metrics { flex-wrap: wrap; }
+    .card, .metric { flex: 1 1 120px; }
+    .step { page-break-inside: avoid; }
+    table { page-break-inside: avoid; }
+    h1, h2, h3 { page-break-after: avoid; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ==================== PORTADA ==================== -->
+<div class="cover">
+  <div class="logo">👟</div>
+  <h1>Pipeline de Entrenamiento<br>AR Shoe Try-On</h1>
+  <p class="subtitle">De 100 fotos a un modelo de IA propio para detección de pies<br>
+  Reemplaza el background subtraction con un modelo ONNX entrenado a medida</p>
+  <div class="badges">
+    <span class="badge">Python 3.10+</span>
+    <span class="badge">PyTorch</span>
+    <span class="badge">SAM (Meta)</span>
+    <span class="badge">ONNX Runtime Web</span>
+    <span class="badge green">~$10 total</span>
+    <span class="badge orange">5–6 semanas</span>
+  </div>
+</div>
+
+<!-- ==================== DIAGRAMA GENERAL ==================== -->
+<h1>Visión General del Pipeline</h1>
+
+<div class="flow">
+  <div><span class="highlight">100 fotos</span> <span class="arrow">→</span> SAM auto-etiqueta <span class="arrow">→</span> <span class="highlight">100,000 augmentadas</span></div>
+  <div class="dim">⬇</div>
+  <div>Entrenar <span class="highlight">FootSegNet</span> (MobileNetV2 + U-Net) <span class="arrow">→</span> Export <span class="highlight">ONNX ~5MB</span></div>
+  <div class="dim">⬇</div>
+  <div>Integrar en <span class="highlight">pose.js</span> — sin cambios en el resto de la app</div>
+  <div class="dim">⬇ (aprendizaje continuo)</div>
+  <div>Users hacen try-on <span class="arrow">→</span> captura automática <span class="arrow">→</span> re-entrenar mensualmente</div>
+</div>
+
+<!-- ==================== FASE 1: FOTOS ==================== -->
+<h1>Fase 1 — Recolección de Fotos (100 base)</h1>
+
+<h2>Distribución por ángulo</h2>
+<table>
+  <tr><th>Ángulo</th><th>Cantidad</th><th>Descripción</th><th>Por qué</th></tr>
+  <tr><td><strong>Cenital (desde arriba)</strong></td><td>40 fotos</td><td>Cámara apuntando directo al suelo, brazos extendidos</td><td>Caso de uso principal del try-on</td></tr>
+  <tr><td><strong>45° diagonal</strong></td><td>30 fotos</td><td>Ángulo natural de selfie de pies, sentado o de pie</td><td>Ángulo más común al usar la app</td></tr>
+  <tr><td><strong>Frontal</strong></td><td>20 fotos</td><td>Cámara a altura de rodilla mirando los pies</td><td>Cuando el usuario sostiene el teléfono bajo</td></tr>
+  <tr><td><strong>Lateral</strong></td><td>10 fotos</td><td>Vista desde el costado del pie</td><td>Complementar variedad</td></tr>
+</table>
+
+<h2>Diversidad requerida en las 100 fotos</h2>
+<table>
+  <tr><th>Variable</th><th>Variantes mínimas</th><th>Ejemplos</th></tr>
+  <tr><td>Personas</td><td>5+ personas distintas</td><td>Diferente tono de piel, tamaño de pie, altura</td></tr>
+  <tr><td>Calzado</td><td>8+ tipos</td><td>Zapatillas, zapatos, botas, sandalias, medias, pie descalzo</td></tr>
+  <tr><td>Pisos</td><td>5+ superficies</td><td>Madera, cerámico, alfombra, cemento, exterior</td></tr>
+  <tr><td>Iluminación</td><td>4+ condiciones</td><td>Natural directa, artificial amarilla, mixta, sombra</td></tr>
+  <tr><td>Distancia</td><td>4 distancias</td><td>30 cm, 60 cm, 90 cm, 120 cm desde el pie</td></tr>
+  <tr><td>Zona visible</td><td>3 encuadres</td><td>Solo pie, pie+tobillo, pie+parte de pierna</td></tr>
+</table>
+
+<div class="alert">
+  <strong>⚠ Importante:</strong> La calidad de estas 100 fotos determina el 80% de la calidad del modelo final. Mejor diversidad ahora = menos iteraciones de reentrenamiento después.
+</div>
+
+<!-- ==================== FASE 2: ETIQUETADO ==================== -->
+<h1>Fase 2 — Etiquetado con SAM (Meta)</h1>
+
+<p>SAM (Segment Anything Model) etiqueta cada foto con solo 1 clic en el pie. Tiempo estimado: <strong>2–3 horas para las 100 fotos</strong>.</p>
+
+<h2>Instalación</h2>
+<pre>pip install segment-anything opencv-python torch torchvision tqdm
+# Descargar checkpoint SAM (342 MB):
+wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth</pre>
+
+<h2>Uso del script</h2>
+<pre>python 2_sam_label.py --checkpoint sam_vit_b_01ec64.pth</pre>
+
+<table>
+  <tr><th>Tecla</th><th>Acción</th></tr>
+  <tr><td><code>Clic izquierdo</code></td><td><span class="check">✓</span> Marcar píxeles de pie (incluir en máscara)</td></tr>
+  <tr><td><code>Clic derecho</code></td><td>✗ Marcar fondo (excluir de máscara)</td></tr>
+  <tr><td><code>S</code></td><td>Guardar máscara y pasar a la siguiente foto</td></tr>
+  <tr><td><code>R</code></td><td>Resetear clics en la imagen actual</td></tr>
+  <tr><td><code>Q</code></td><td>Salir y guardar progreso</td></tr>
+</table>
+
+<p>Las máscaras se guardan en <code>training/data/masks/</code> con el mismo nombre que la foto (PNG en blanco y negro: blanco = pie, negro = fondo).</p>
+
+<!-- ==================== FASE 3: AUGMENTACIÓN ==================== -->
+<h1>Fase 3 — Augmentación: 100 → 100,000 Imágenes</h1>
+
+<h2>Instalación</h2>
+<pre>pip install albumentations opencv-python Pillow tqdm</pre>
+
+<h2>Ejecutar</h2>
+<pre>python 1_augment.py  # ~30–60 min en CPU | resultado: ~15 GB en disco</pre>
+
+<h2>Transformaciones aplicadas por imagen (×1,000)</h2>
+<table>
+  <tr><th>Transformación</th><th>Rango</th><th>Propósito</th></tr>
+  <tr><td>Rotación</td><td>±40°</td><td>Pies en distintas orientaciones</td></tr>
+  <tr><td>Escala</td><td>70%–130%</td><td>Distintas distancias de la cámara</td></tr>
+  <tr><td>Flip horizontal</td><td>50% prob.</td><td>Pie izquierdo ↔ derecho</td></tr>
+  <tr><td>Perspectiva</td><td>5–15%</td><td>Distintos ángulos de la cámara</td></tr>
+  <tr><td>Brillo/contraste</td><td>±40%</td><td>Distintas condiciones de luz</td></tr>
+  <tr><td>Hue/saturación</td><td>±30</td><td>Variaciones de color de zapatos y piso</td></tr>
+  <tr><td>Blur (Gauss/Motion)</td><td>kernel 3–7</td><td>Movimiento de cámara, desenfoque</td></tr>
+  <tr><td>Ruido Gaussiano</td><td>σ 10–50</td><td>Condiciones de baja luz</td></tr>
+  <tr><td>Fondo sintético</td><td>30% prob.</td><td>Nuevos tipos de piso sin fotografiar</td></tr>
+</table>
+
+<!-- ==================== FASE 4: ENTRENAMIENTO ==================== -->
+<h1>Fase 4 — Entrenamiento del Modelo</h1>
+
+<h2>Arquitectura: FootSegNet</h2>
+<table>
+  <tr><th>Componente</th><th>Detalle</th></tr>
+  <tr><td>Encoder</td><td>MobileNetV2 pre-entrenado en ImageNet (pesos congelados primeras capas)</td></tr>
+  <tr><td>Decoder</td><td>U-Net ligero de 5 niveles con skip connections</td></tr>
+  <tr><td>Entrada</td><td>256 × 256 × 3 (RGB normalizado)</td></tr>
+  <tr><td>Salida</td><td>256 × 256 × 1 (máscara de confianza 0–1)</td></tr>
+  <tr><td>Pérdida</td><td>BCE + Dice Loss (robusto para clases desbalanceadas)</td></tr>
+  <tr><td>Parámetros</td><td>~3.4M</td></tr>
+  <tr><td>Tamaño ONNX</td><td>~5 MB</td></tr>
+</table>
+
+<h2>Instalación</h2>
+<pre>pip install torch torchvision tqdm scikit-learn Pillow</pre>
+
+<h2>Ejecutar entrenamiento</h2>
+<pre>python 3_train_model.py --epochs 30 --batch_size 16</pre>
+
+<h2>Opciones de hardware</h2>
+<table>
+  <tr><th>Hardware</th><th>Tiempo (30 epochs)</th><th>Costo</th><th>Recomendado</th></tr>
+  <tr><td>CPU local (i7/Ryzen)</td><td>~40 horas</td><td>$0</td><td>No ideal</td></tr>
+  <tr><td>Google Colab T4 (gratis)</td><td>~6–8 horas</td><td>$0</td><td><span class="check">✓ Opción principal</span></td></tr>
+  <tr><td>Google Colab A100 (Pro)</td><td>~2–3 horas</td><td>~$5</td><td><span class="check">✓ Si hay prisa</span></td></tr>
+  <tr><td>Runpod / Vast.ai</td><td>~1–2 horas</td><td>~$3</td><td>Alternativa</td></tr>
+</table>
+
+<div class="alert">
+  <strong>Para Google Colab:</strong> Subir la carpeta <code>data_augmented/</code> a Google Drive, montar Drive en Colab, y ejecutar el script desde ahí. El modelo entrenado se guarda de vuelta en Drive.
+</div>
+
+<!-- ==================== FASE 5: EXPORT ==================== -->
+<h1>Fase 5 — Exportar a ONNX</h1>
+
+<h2>Instalación</h2>
+<pre>pip install onnx onnxruntime</pre>
+
+<h2>Exportar</h2>
+<pre>python 4_export_onnx.py --checkpoint foot_model.pth
+# Genera: models/foot_segmenter.onnx (~5 MB)
+# Copiar ese archivo a la carpeta models/ del proyecto AR</pre>
+
+<h2>Integración en pose.js</h2>
+<p>El ONNX se integra reemplazando el background subtraction actual. <strong>No cambia nada en renderer.js ni app.js:</strong></p>
+<pre>// pose.js — reemplazar initPose() y detectPose() con:
+import { InferenceSession, Tensor } from 'onnxruntime-web';
+
+let session = null;
+export async function initPose() {
+  session = await InferenceSession.create('./models/foot_segmenter.onnx');
+}
+
+export async function detectPose(videoEl) {
+  // Preprocesar: video → Float32Array normalizado 1×3×256×256
+  const tensor = preprocessVideo(videoEl);
+  const result = await session.run({ input: tensor });
+  const mask   = result.output.data;  // Float32Array 256×256
+  return { data: mask, width: 256, height: 256 };
+  // extractFootLandmarks() ya recibe este formato → sin cambios
+}</pre>
+
+<!-- ==================== FASE 6: CAPTURA CONTINUA ==================== -->
+<h1>Fase 6 — Aprendizaje Continuo</h1>
+
+<p>Cada sesión de try-on captura frames automáticamente en el navegador (IndexedDB). El usuario puede descargar esos frames mensualmente para re-entrenar el modelo.</p>
+
+<div class="steps">
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content">
+      <h3>Captura automática en producción</h3>
+      <p>Cada 2 segundos durante una detección exitosa, se guarda un frame 256×256 + coordenadas del pie en IndexedDB del browser. Máximo 5,000 frames por dispositivo.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content">
+      <h3>Exportar dataset mensualmente</h3>
+      <p>El usuario presiona "Exportar dataset" → descarga un ZIP con todas las imágenes y un <code>landmarks.json</code> con las posiciones del pie.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content">
+      <h3>Añadir al dataset y re-entrenar</h3>
+      <p>Agregar las nuevas imágenes a <code>data_augmented/</code>. Fine-tuning rápido: <code>python 3_train_model.py --epochs 10</code> (parte del modelo ya aprendió, converge más rápido).</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-content">
+      <h3>Publicar nuevo modelo</h3>
+      <p>Exportar ONNX → subir a GitHub Pages → los usuarios reciben el modelo mejorado automáticamente en su próxima visita.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== MÉTRICAS ==================== -->
+<h1>Métricas Objetivo</h1>
+
+<div class="metrics">
+  <div class="metric"><div class="value">&gt;85%</div><div class="name">IoU (precisión de máscara)</div></div>
+  <div class="metric"><div class="value">&lt;40ms</div><div class="name">Inferencia en móvil</div></div>
+  <div class="metric"><div class="value">&lt;5%</div><div class="name">Falsos positivos</div></div>
+  <div class="metric"><div class="value">&gt;90%</div><div class="name">Detección cenital</div></div>
+  <div class="metric"><div class="value">~5MB</div><div class="name">Tamaño modelo ONNX</div></div>
+</div>
+
+<!-- ==================== COSTOS ==================== -->
+<h1>Resumen de Costos y Tiempos</h1>
+
+<div class="cards">
+  <div class="card"><div class="amount">2–3</div><div class="label">semanas<br>Datos + etiquetado</div></div>
+  <div class="card"><div class="amount">1–2</div><div class="label">semanas<br>Entrenamiento</div></div>
+  <div class="card"><div class="amount">1</div><div class="label">semana<br>Integración</div></div>
+  <div class="card highlight"><div class="amount">~$10</div><div class="label">Costo total<br>(GPU Colab)</div></div>
+</div>
+
+<table>
+  <tr><th>Ítem</th><th>Costo</th><th>Notas</th></tr>
+  <tr><td>100 fotos base (tiempo propio)</td><td>$0</td><td>~2–3 horas de fotografía</td></tr>
+  <tr><td>SAM etiquetado (Colab gratuito)</td><td>$0</td><td>2–3 horas de trabajo con el script</td></tr>
+  <tr><td>Augmentación (PC local)</td><td>$0</td><td>30–60 min de CPU</td></tr>
+  <tr><td>Entrenamiento (Google Colab Pro)</td><td>~$10</td><td>1 mes de suscripción o créditos puntuales</td></tr>
+  <tr><td>Storage GitHub (modelo ONNX &lt;100MB)</td><td>$0</td><td>GitHub LFS gratuito hasta 1GB</td></tr>
+  <tr><td><strong>TOTAL</strong></td><td><strong>~$10</strong></td><td>Sin infraestructura propia</td></tr>
+</table>
+
+<!-- ==================== PIE DE PÁGINA ==================== -->
+<hr style="margin-top:48px;border:none;border-top:2px solid #e0e0e0"/>
+<p style="text-align:center;color:#888;font-size:9pt;margin-top:16px">
+  AR Shoe Try-On · Pipeline de Entrenamiento · github.com/3DCommerceCL/ar-shoes
+</p>
+
+</body>
+</html>
