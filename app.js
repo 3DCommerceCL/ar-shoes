@@ -112,9 +112,17 @@ async function detectionLoop() {
     if (pixCount < 150) {
       noFootFrames++;
       if (noFootFrames > NO_FOOT_THRESHOLD) {
-        setStatus('Pon tu pie en la cámara');
+        setStatus('Pon tu pie en la cámara ↓');
         updateShoeTransform(null);
       }
+      await sleep(200);
+      continue;
+    }
+
+    // Si demasiado cambio → cámara se movió
+    if (pixCount > 256 * 256 * 0.30) {
+      setStatus('Recalibra si moviste la cámara');
+      updateShoeTransform(null);
       await sleep(200);
       continue;
     }

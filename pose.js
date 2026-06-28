@@ -68,32 +68,44 @@ function extractFootLandmarks(seg, side = 'right') {
   if (!seg) return null;
   const { data, width, height } = seg;
 
-  // Píxeles con diferencia significativa del fondo
+  // 1. Contar cambio total — si >30% del frame cambió, la cámara se movió
+  let totalChanged = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] > 0.10) totalChanged++;
+  }
+  if (totalChanged > width * height * 0.30) return null; // cámara movida o no apunta a pies
+
+  // 2. Solo el 50% inferior del frame — pies siempre están abajo
+  const yStart = Math.floor(height * 0.50);
   const foreground = [];
-  for (let y = 0; y < height; y++) {
+  for (let y = yStart; y < height; y++) {
     for (let x = 0; x < width; x++) {
       if (data[y * width + x] > 0.10) foreground.push([x, y]);
     }
   }
   if (foreground.length < 150) return null;
 
-  // Tomar solo el 25% más inferior (zona de zapatos, ignora jeans/piernas)
+  // 3. El centroide debe estar en el tercio inferior del frame (no en pared/mueble alto)
+  const avgY = foreground.reduce((s, [, y]) => s + y, 0) / foreground.length;
+  if (avgY < height * 0.60) return null;
+
+  // 4. Tomar solo el 30% más inferior del blob detectado (zapatos, no jeans)
   const ys      = foreground.map(([, y]) => y);
   const maxY    = Math.max(...ys);
   const minY    = Math.min(...ys);
-  const yThresh = minY + (maxY - minY) * 0.75;
+  const yThresh = minY + (maxY - minY) * 0.70;
   const footArea = foreground.filter(([, y]) => y >= yThresh);
 
-  if (footArea.length < 60) return null;
+  if (footArea.length < 50) return null;
 
-  // Filtrar por lado (izquierdo/derecho de la imagen)
+  // 5. Filtrar por lado
   const xs   = footArea.map(([x]) => x);
   const midX = (Math.min(...xs) + Math.max(...xs)) / 2;
   const pixels = side === 'left'
     ? footArea.filter(([x]) => x < midX)
     : footArea.filter(([x]) => x >= midX);
 
-  const src = pixels.length >= 40 ? pixels : footArea;
+  const src = pixels.length >= 30 ? pixels : footArea;
 
   return landmarksFromPixels(src, width, height, side);
 }
