@@ -46,17 +46,10 @@ async function init() {
   // 2. Three.js ya importado estáticamente arriba
 
   // 3. Inicializar módulos — MiDaS y segmentador son opcionales
-  setStatus('Cargando MediaPipe…');
-  await withTimeout(initPose(), 30000, 'MediaPipe')
-    .catch(e => console.warn('[app] pose init falló:', e.message));
-  setStatus('MediaPipe listo ✓');
-
-  setStatus('Cargando profundidad (opcional)…');
-  await withTimeout(initDepth(), 25000, 'MiDaS')
-    .catch(e => console.warn('[app] MiDaS saltado:', e.message));
-
-  await withTimeout(initSegmenter(), 20000, 'Segmenter')
-    .catch(e => console.warn('[app] segmenter saltado:', e.message));
+  setStatus('Cargando segmentador…');
+  await withTimeout(initPose(), 30000, 'Segmentador')
+    .catch(e => console.warn('[app] segmentador falló:', e.message));
+  setStatus('Listo — apunta la cámara a tus pies');
 
   // 4. Renderer + GLB
   setStatus('Cargando zapato 3D…');
