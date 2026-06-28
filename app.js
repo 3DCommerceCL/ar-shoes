@@ -70,72 +70,62 @@ async function init() {
   setStatus('Apunta la cámara hacia tus pies');
   window.dispatchEvent(new Event('ar-ready'));
   isRunning = true;
-  requestAnimationFrame(loop);
+  requestAnimationFrame(renderLoop); // render a 60fps
+  detectionLoop();                   // detección a ~8fps en paralelo
 }
 
-// ---- Loop principal ----
-async function loop(timestamp) {
+// ---- Loop de render — corre a 60fps sin bloqueos ----
+function renderLoop() {
   if (!isRunning) return;
-
-  frameCount++;
-  const now = performance.now();
-
-  // A. Segmentación BodyPix (async)
-  const segmentation = await detectPose(videoEl);
-
-  if (!segmentation) {
-    noFootFrames++;
-    if (noFootFrames > NO_FOOT_THRESHOLD) {
-      setStatus('Apunta la cámara hacia tus pies');
-    }
-    try { renderFrame(); } catch(e) {}
-    requestAnimationFrame(loop);
-    return;
-  }
-
-  noFootFrames = 0;
-
-  // B. Detectar pie dominante
-  if (!window._footManualOverride) {
-    currentSide = detectDominantFoot(segmentation);
-  }
-
-  // C. Extraer landmarks del pie desde segmentación
-  const rawLms = extractFootLandmarks(segmentation, currentSide);
-  if (!rawLms) {
-    setStatus('Muestra tus pies en la cámara');
-    renderFrame();
-    requestAnimationFrame(loop);
-    return;
-  }
-
-  // D. Suavizar landmarks con OneEuroFilter
-  const lmArray = [rawLms.heel, rawLms.toe, rawLms.ankle];
-  const smoothed = applyFilters(filters, lmArray, now / 1000);
-  const footLms = { heel: smoothed[0], toe: smoothed[1], ankle: smoothed[2], side: rawLms.side };
-
-  setStatus(`Pie ${currentSide} detectado ✓`);
-
-  // E. Profundidad MiDaS (cada N frames)
-  if (frameCount % DEPTH_EVERY === 0) {
-    depthMap = await estimateDepth(videoEl);
-  }
-
-  // F. Máscara del pie (oclusión)
-  const maskCanvas = await getFootMask(videoEl, footLms, now, canvasEl.width, canvasEl.height);
-  updateMask(maskCanvas);
-
-  // G. Escala del zapato
-  const scale = computeScaleFactor(footLms, depthMap, videoEl.videoWidth, videoEl.videoHeight);
-
-  // H. Actualizar posición del GLB directo desde landmarks 2D
-  updateShoeTransform(footLms, scale);
-
-  // J. Render
-  try { renderFrame(); } catch(e) { console.warn('[render]', e.message); }
-
-  requestAnimationFrame(loop);
+  try { renderFrame(); } catch(e) {}
+  requestAnimationFrame(renderLoop);
 }
+
+// ---- Loop de detección — corre a ~8fps, async, no bloquea el render ----
+async function detectionLoop() {
+  while (isRunning) {
+    frameCount++;
+    const now = performance.now();
+
+    const segmentation = await detectPose(videoEl);
+
+    if (!segmentation) {
+      noFootFrames++;
+      if (noFootFrames > NO_FOOT_THRESHOLD) {
+        setStatus('Apunta la cámara hacia tus pies desde arriba');
+      }
+      await sleep(120);
+      continue;
+    }
+
+    noFootFrames = 0;
+
+    if (!window._footManualOverride) {
+      currentSide = detectDominantFoot(segmentation);
+    }
+
+    const rawLms = extractFootLandmarks(segmentation, currentSide);
+    if (!rawLms) {
+      setStatus('Muestra tus pies en la cámara');
+      await sleep(120);
+      continue;
+    }
+
+    // Suavizar con OneEuroFilter
+    const lmArray  = [rawLms.heel, rawLms.toe, rawLms.ankle];
+    const smoothed = applyFilters(filters, lmArray, now / 1000);
+    const footLms  = { heel: smoothed[0], toe: smoothed[1], ankle: smoothed[2], side: rawLms.side };
+
+    setStatus(`Pie ${currentSide} detectado ✓`);
+
+    const scale = computeScaleFactor(footLms, null, videoEl.videoWidth, videoEl.videoHeight);
+    updateShoeTransform(footLms, scale);
+
+    await sleep(120); // ~8fps de detección
+  }
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 
 // ---- Cámara ----
