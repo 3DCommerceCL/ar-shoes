@@ -68,78 +68,69 @@ function extractFootLandmarks(seg, side = 'right') {
   if (!seg) return null;
   const { data, width, height } = seg;
 
-  // 1. Contar cambio total — si >30% del frame cambió, la cámara se movió
-  let totalChanged = 0;
-  for (let i = 0; i < data.length; i++) {
-    if (data[i] > 0.10) totalChanged++;
-  }
-  if (totalChanged > width * height * 0.30) return null; // cámara movida o no apunta a pies
-
-  // 2. Solo el 50% inferior del frame — pies siempre están abajo
-  const yStart = Math.floor(height * 0.50);
+  // Solo el 55% inferior del frame — pies siempre están abajo cuando cámara apunta al suelo
+  const yStart = Math.floor(height * 0.45);
   const foreground = [];
   for (let y = yStart; y < height; y++) {
     for (let x = 0; x < width; x++) {
       if (data[y * width + x] > 0.10) foreground.push([x, y]);
     }
   }
-  if (foreground.length < 150) return null;
+  if (foreground.length < 100) return null;
 
-  // 3. El centroide debe estar en el tercio inferior del frame (no en pared/mueble alto)
-  const avgY = foreground.reduce((s, [, y]) => s + y, 0) / foreground.length;
-  if (avgY < height * 0.60) return null;
-
-  // 4. Tomar solo el 30% más inferior del blob detectado (zapatos, no jeans)
+  // Tomar la mitad inferior del blob → zona de zapatos
   const ys      = foreground.map(([, y]) => y);
   const maxY    = Math.max(...ys);
   const minY    = Math.min(...ys);
-  const yThresh = minY + (maxY - minY) * 0.70;
+  const yThresh = minY + (maxY - minY) * 0.65;
   const footArea = foreground.filter(([, y]) => y >= yThresh);
+  if (footArea.length < 40) return null;
 
-  if (footArea.length < 50) return null;
-
-  // 5. Filtrar por lado
+  // Filtrar por lado
   const xs   = footArea.map(([x]) => x);
   const midX = (Math.min(...xs) + Math.max(...xs)) / 2;
-  const pixels = side === 'left'
+  const half = side === 'left'
     ? footArea.filter(([x]) => x < midX)
     : footArea.filter(([x]) => x >= midX);
-
-  const src = pixels.length >= 30 ? pixels : footArea;
+  const src = half.length >= 25 ? half : footArea;
 
   return landmarksFromPixels(src, width, height, side);
 }
 
-// PCA sobre el blob del pie → heel, toe, ankle
+// Calcula posición, orientación y tamaño del pie desde los píxeles detectados
 function landmarksFromPixels(pixels, width, height, side) {
+  // Centroide
   let sumX = 0, sumY = 0;
   for (const [x, y] of pixels) { sumX += x; sumY += y; }
   const cx = sumX / pixels.length;
   const cy = sumY / pixels.length;
 
+  // Bounding box
+  let minX = Infinity, maxX = -Infinity, minY2 = Infinity, maxY2 = -Infinity;
+  for (const [x, y] of pixels) {
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY2) minY2 = y; if (y > maxY2) maxY2 = y;
+  }
+  const bboxW = maxX - minX;
+  const bboxH = maxY2 - minY2;
+
+  // PCA para ángulo de orientación
   let cxx = 0, cxy = 0, cyy = 0;
   for (const [x, y] of pixels) {
     const dx = x - cx, dy = y - cy;
-    cxx += dx * dx;
-    cxy += dx * dy;
-    cyy += dy * dy;
+    cxx += dx * dx; cxy += dx * dy; cyy += dy * dy;
   }
-
   const angle = 0.5 * Math.atan2(2 * cxy, cxx - cyy);
   const cos = Math.cos(angle), sin = Math.sin(angle);
 
-  let minP = Infinity, maxP = -Infinity;
-  let heelPt = [cx, cy], toePt = [cx, cy];
-  for (const [x, y] of pixels) {
-    const p = (x - cx) * cos + (y - cy) * sin;
-    if (p < minP) { minP = p; heelPt = [x, y]; }
-    if (p > maxP) { maxP = p; toePt  = [x, y]; }
-  }
-
+  // Heel y toe simétricos alrededor del centroide en la dirección PCA
+  const halfLen = Math.max(bboxW, bboxH) * 0.45;
   return {
-    heel:  { x: heelPt[0] / width, y: heelPt[1] / height, visibility: 1 },
-    toe:   { x: toePt[0]  / width, y: toePt[1]  / height, visibility: 1 },
-    ankle: { x: cx / width,        y: cy / height,         visibility: 1 },
+    heel:  { x: (cx - cos * halfLen) / width,  y: (cy - sin * halfLen) / height,  visibility: 1 },
+    toe:   { x: (cx + cos * halfLen) / width,  y: (cy + sin * halfLen) / height,  visibility: 1 },
+    ankle: { x: cx / width,                    y: cy / height,                     visibility: 1 },
+    bboxW: bboxW / width,
+    bboxH: bboxH / height,
     side,
   };
 }

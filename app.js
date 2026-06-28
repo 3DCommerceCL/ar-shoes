@@ -14,12 +14,13 @@ const GLB_PATH  = './models/shoe.glb';
 const STATUS_EL = document.getElementById('status');
 
 let videoEl, canvasEl;
-let currentSide   = 'right';
-let filters       = null;
-let isRunning     = false;
-let noFootFrames  = 0;
-let firstDetected = false;
-const NO_FOOT_THRESHOLD = 15;
+let currentSide    = 'right';
+let filters        = null;
+let isRunning      = false;
+let noFootFrames   = 0;
+let firstDetected  = false;
+let lastFootLms    = null; // última posición válida del pie
+const NO_FOOT_THRESHOLD = 20; // ~4s antes de ocultar zapato
 
 // ---- Bootstrap ----
 async function init() {
@@ -96,38 +97,13 @@ async function detectionLoop() {
     if (!seg) {
       noFootFrames++;
       if (noFootFrames > NO_FOOT_THRESHOLD) {
-        setStatus('Pon tu pie en la cámara');
-        updateShoeTransform(null);
-      }
-      await sleep(200);
-      continue;
-    }
-
-    // Contar píxeles significativos para feedback
-    let pixCount = 0;
-    for (let i = 0; i < seg.data.length; i++) {
-      if (seg.data[i] > 0.10) pixCount++;
-    }
-
-    if (pixCount < 150) {
-      noFootFrames++;
-      if (noFootFrames > NO_FOOT_THRESHOLD) {
         setStatus('Pon tu pie en la cámara ↓');
         updateShoeTransform(null);
+        lastFootLms = null;
       }
       await sleep(200);
       continue;
     }
-
-    // Si demasiado cambio → cámara se movió
-    if (pixCount > 256 * 256 * 0.30) {
-      setStatus('Recalibra si moviste la cámara');
-      updateShoeTransform(null);
-      await sleep(200);
-      continue;
-    }
-
-    noFootFrames = 0;
 
     if (!window._footManualOverride) {
       currentSide = detectDominantFoot(seg);
@@ -135,18 +111,29 @@ async function detectionLoop() {
 
     const rawLms = extractFootLandmarks(seg, currentSide);
     if (!rawLms) {
-      setStatus('Centra el pie en la cámara');
+      noFootFrames++;
+      if (noFootFrames > NO_FOOT_THRESHOLD) {
+        setStatus('Pon tu pie en la cámara ↓');
+        updateShoeTransform(null);
+        lastFootLms = null;
+      }
       await sleep(200);
       continue;
     }
 
+    noFootFrames = 0;
+
     const lmArray  = [rawLms.heel, rawLms.toe, rawLms.ankle];
     const smoothed = applyFilters(filters, lmArray, now / 1000);
-    const footLms  = { heel: smoothed[0], toe: smoothed[1], ankle: smoothed[2], side: rawLms.side };
+    const footLms  = {
+      heel: smoothed[0], toe: smoothed[1], ankle: smoothed[2],
+      bboxW: rawLms.bboxW, bboxH: rawLms.bboxH,
+      side: rawLms.side,
+    };
+    lastFootLms = footLms;
 
     setStatus(`Pie ${currentSide === 'right' ? 'derecho' : 'izquierdo'} detectado ✓`);
 
-    // Ocultar instrucción "Paso 2" al primer pie detectado
     if (!firstDetected) {
       firstDetected = true;
       document.getElementById('step-2').style.display = 'none';

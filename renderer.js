@@ -129,9 +129,12 @@ function updateShoeTransform(footLandmarks, scaleFactor = 1) {
 
   // El modelo mide ~0.262 unidades en largo
   // Queremos que el zapato ocupe aprox. el tamaño detectado del pie, cap 35% pantalla
+  // Usar el bbox del pie para escala (más estable que heel-toe distance)
+  const bboxSpan  = Math.max(footLandmarks.bboxW ?? 0, footLandmarks.bboxH ?? 0);
   const footLen   = Math.sqrt((tx - hx) ** 2 + (ty - hy) ** 2);
-  // Shoe model length ≈ 0.262 local units; target: fill ~footLen on screen, max 30%
-  const targetNDC = Math.max(Math.min(footLen * 0.85, 0.38), 0.20);
+  const span      = Math.max(bboxSpan, footLen);
+  // Zapato ocupa 70% del span detectado, mínimo 20% pantalla, máximo 38%
+  const targetNDC = Math.max(Math.min(span * 0.70, 0.38), 0.20);
   const scale     = targetNDC / 0.262;
 
   shoeModel.position.set(cx, cy, 1);
