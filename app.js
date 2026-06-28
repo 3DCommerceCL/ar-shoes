@@ -86,9 +86,9 @@ async function loop(timestamp) {
   if (!segmentation) {
     noFootFrames++;
     if (noFootFrames > NO_FOOT_THRESHOLD) {
-      setStatus('Apunta la cámara hacia tus pies desde arriba');
+      setStatus('Apunta la cámara hacia tus pies');
     }
-    renderFrame();
+    try { renderFrame(); } catch(e) {}
     requestAnimationFrame(loop);
     return;
   }
@@ -132,10 +132,11 @@ async function loop(timestamp) {
   updateShoeTransform(footLms, scale);
 
   // J. Render
-  renderFrame();
+  try { renderFrame(); } catch(e) { console.warn('[render]', e.message); }
 
   requestAnimationFrame(loop);
 }
+
 
 // ---- Cámara ----
 async function startCamera() {

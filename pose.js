@@ -15,7 +15,7 @@ async function initPose(wasmPath = 'https://cdn.jsdelivr.net/npm/@mediapipe/task
     baseOptions: {
       modelAssetPath:
         'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite',
-      delegate: 'GPU',
+      delegate: 'CPU',
     },
     runningMode:           'VIDEO',
     outputCategoryMask:    false,
@@ -27,21 +27,32 @@ async function initPose(wasmPath = 'https://cdn.jsdelivr.net/npm/@mediapipe/task
   console.log('[pose] Segmentador listo');
 }
 
+let _processing = false;
+let _lastTs = 0;
+
 // Retorna objeto segmentation con pixeles de persona, o null
 async function detectPose(videoEl) {
-  if (!segmenter || !videoEl.videoWidth) return null;
+  if (!segmenter || !videoEl.videoWidth || _processing) return null;
+  _processing = true;
   try {
-    const result = segmenter.segmentForVideo(videoEl, performance.now());
-    if (!result?.confidenceMasks?.[0]) return null;
+    const ts = performance.now();
+    if (ts <= _lastTs) { _processing = false; return null; }
+    _lastTs = ts;
 
-    const mask  = result.confidenceMasks[0];
-    const data  = mask.getAsFloat32Array();
-    const W     = mask.width;
-    const H     = mask.height;
+    const result = segmenter.segmentForVideo(videoEl, ts);
+    if (!result?.confidenceMasks?.[0]) { _processing = false; return null; }
+
+    const mask = result.confidenceMasks[0];
+    const data = mask.getAsFloat32Array();
+    const W    = mask.width;
+    const H    = mask.height;
     mask.close();
 
+    _processing = false;
     return { data, width: W, height: H };
   } catch (e) {
+    console.warn('[pose] segmentForVideo error:', e.message);
+    _processing = false;
     return null;
   }
 }
