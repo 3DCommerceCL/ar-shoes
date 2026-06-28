@@ -68,8 +68,9 @@ function extractFootLandmarks(allLandmarks, side = 'left') {
   const lms = idx.map(i => allLandmarks[i]);
 
   // Verificar visibilidad mínima
+  // sin umbral de visibilidad — usar lo que haya
   const minVis = Math.min(...lms.map(l => l.visibility ?? 0));
-  if (minVis < 0.15) return null;
+  console.log(`[pose] foot visibility ${side}: ${minVis.toFixed(3)}`);
 
   return {
     heel:   allLandmarks[idx[0]],

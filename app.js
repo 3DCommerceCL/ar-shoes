@@ -93,7 +93,7 @@ async function loop(timestamp) {
   if (!allLandmarks) {
     noFootFrames++;
     if (noFootFrames > NO_FOOT_THRESHOLD) {
-      setStatus('Aleja la cámara ~1 metro y muestra pie + pierna completa en cuadro');
+      setStatus('Sin cuerpo detectado — asegúrate de que el torso sea visible');
     }
     renderFrame();
     requestAnimationFrame(loop);
@@ -101,6 +101,13 @@ async function loop(timestamp) {
   }
 
   noFootFrames = 0;
+
+  // Mostrar visibilidad de los landmarks del pie para diagnóstico
+  if (frameCount % 30 === 0) {
+    const lh = allLandmarks[29]?.visibility?.toFixed(2) ?? '?';
+    const rh = allLandmarks[30]?.visibility?.toFixed(2) ?? '?';
+    setStatus(`Cuerpo OK | pie-izq:${lh} pie-der:${rh} | apunta más abajo`);
+  }
 
   // B. Detectar pie dominante automáticamente si no fue seleccionado manualmente
   if (!window._footManualOverride) {
