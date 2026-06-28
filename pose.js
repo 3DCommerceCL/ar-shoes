@@ -80,15 +80,27 @@ function extractFootLandmarks(seg, side = 'right') {
   if (!seg) return null;
   const { data, width, height } = seg;
 
-  // Recolectar píxeles de persona con alta confianza (> 0.6)
+  // Diagnóstico: calcular max confianza y cantidad de pixels por umbral
+  let maxConf = 0, px15 = 0, px30 = 0, px50 = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i];
+    if (v > maxConf) maxConf = v;
+    if (v > 0.15) px15++;
+    if (v > 0.30) px30++;
+    if (v > 0.50) px50++;
+  }
+  // Mostrar en status para diagnóstico
+  const statusEl = document.getElementById('status');
+  if (statusEl) statusEl.textContent = `max:${maxConf.toFixed(2)} px15:${px15} px30:${px30} px50:${px50}`;
+
+  // Threshold muy bajo — aceptar cualquier señal del modelo
   const person = [];
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (data[y * width + x] > 0.6) person.push([x, y]);
+      if (data[y * width + x] > 0.15) person.push([x, y]);
     }
   }
-  // Requerir masa mínima — evitar falsos positivos de objetos pequeños
-  if (person.length < 300) return null;
+  if (person.length < 100) return null;
 
   // Tomar el 35% inferior del cuerpo segmentado (zona de pies)
   const ys   = person.map(([, y]) => y);
