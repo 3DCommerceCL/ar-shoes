@@ -80,14 +80,15 @@ function extractFootLandmarks(seg, side = 'right') {
   if (!seg) return null;
   const { data, width, height } = seg;
 
-  // Recolectar todos los píxeles de persona (confianza > 0.5)
+  // Recolectar píxeles de persona con alta confianza (> 0.6)
   const person = [];
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (data[y * width + x] > 0.5) person.push([x, y]);
+      if (data[y * width + x] > 0.6) person.push([x, y]);
     }
   }
-  if (person.length < 80) return null;
+  // Requerir masa mínima — evitar falsos positivos de objetos pequeños
+  if (person.length < 300) return null;
 
   // Tomar el 35% inferior del cuerpo segmentado (zona de pies)
   const ys   = person.map(([, y]) => y);

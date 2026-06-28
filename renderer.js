@@ -117,15 +117,23 @@ function updateShoeTransform(footLandmarks, scaleFactor = 1) {
   const hy = -(footLandmarks.heel.y * 2 - 1);
   const tx = footLandmarks.toe.x  * 2 - 1;
   const ty = -(footLandmarks.toe.y  * 2 - 1);
+  const ax = footLandmarks.ankle.x * 2 - 1;
+  const ay = -(footLandmarks.ankle.y * 2 - 1);
 
-  // Centro y ángulo del pie
-  const cx    = (hx + tx) / 2;
-  const cy    = (hy + ty) / 2;
+  // Centrar en el ancla (centroide del blob del pie)
+  const cx = ax;
+  const cy = ay;
+
+  // Ángulo del eje principal (heel → toe)
   const angle = Math.atan2(ty - hy, tx - hx);
 
-  // Escala proporcional al tamaño del pie en pantalla
+  // El modelo mide ~0.262 unidades locales en largo
+  // La pantalla NDC = 2 unidades → para llenar ~35% de pantalla necesitamos:
+  // 0.262 * scale = 0.7  →  scale ≈ 2.7
   const footLen = Math.sqrt((tx - hx) ** 2 + (ty - hy) ** 2);
-  const scale   = Math.max(footLen * 1.2 * scaleFactor, 0.08);
+  // Cuando footLen es confiable (> 0.1) usarlo; si no, usar 0.7 NDC como tamaño
+  const targetLen = Math.max(footLen, 0.7);
+  const scale     = (targetLen * scaleFactor * 1.2) / 0.262;
 
   shoeModel.position.set(cx, cy, 1);
   shoeModel.rotation.set(-Math.PI / 2, 0, angle + Math.PI);
