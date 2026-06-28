@@ -14,10 +14,11 @@ const GLB_PATH  = './models/shoe.glb';
 const STATUS_EL = document.getElementById('status');
 
 let videoEl, canvasEl;
-let currentSide  = 'right';
-let filters      = null;
-let isRunning    = false;
-let noFootFrames = 0;
+let currentSide   = 'right';
+let filters       = null;
+let isRunning     = false;
+let noFootFrames  = 0;
+let firstDetected = false;
 const NO_FOOT_THRESHOLD = 15;
 
 // ---- Bootstrap ----
@@ -62,9 +63,9 @@ function onCalibrate() {
 }
 
 function onRecalibrate() {
-  // Detener loop, volver a paso 1
-  isRunning = false;
-  updateShoeTransform(null); // ocultar zapato
+  isRunning    = false;
+  firstDetected = false;
+  updateShoeTransform(null);
   setTimeout(() => {
     isRunning = false;
     showStep(1);
@@ -137,8 +138,13 @@ async function detectionLoop() {
 
     setStatus(`Pie ${currentSide === 'right' ? 'derecho' : 'izquierdo'} detectado ✓`);
 
-    const scale = computeScaleFactor(footLms, null, videoEl.videoWidth, videoEl.videoHeight);
-    updateShoeTransform(footLms, scale);
+    // Ocultar instrucción "Paso 2" al primer pie detectado
+    if (!firstDetected) {
+      firstDetected = true;
+      document.getElementById('step-2').style.display = 'none';
+    }
+
+    updateShoeTransform(footLms, 1);
 
     await sleep(200);
   }

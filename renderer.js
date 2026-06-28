@@ -127,13 +127,11 @@ function updateShoeTransform(footLandmarks, scaleFactor = 1) {
   // Ángulo del eje principal (heel → toe)
   const angle = Math.atan2(ty - hy, tx - hx);
 
-  // El modelo mide ~0.262 unidades locales en largo
-  // La pantalla NDC = 2 unidades → para llenar ~35% de pantalla necesitamos:
-  // 0.262 * scale = 0.7  →  scale ≈ 2.7
-  const footLen = Math.sqrt((tx - hx) ** 2 + (ty - hy) ** 2);
-  // Cuando footLen es confiable (> 0.1) usarlo; si no, usar 0.7 NDC como tamaño
-  const targetLen = Math.max(footLen, 0.7);
-  const scale     = (targetLen * scaleFactor * 1.2) / 0.262;
+  // El modelo mide ~0.262 unidades en largo
+  // Queremos que el zapato ocupe aprox. el tamaño detectado del pie, cap 35% pantalla
+  const footLen   = Math.sqrt((tx - hx) ** 2 + (ty - hy) ** 2);
+  const targetNDC = Math.max(Math.min(footLen * 0.9, 0.45), 0.22);
+  const scale     = targetNDC / 0.262;
 
   shoeModel.position.set(cx, cy, 1);
   shoeModel.rotation.set(-Math.PI / 2, 0, angle + Math.PI);

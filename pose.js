@@ -77,11 +77,11 @@ function extractFootLandmarks(seg, side = 'right') {
   }
   if (foreground.length < 150) return null;
 
-  // Tomar el 40% inferior del bounding box de foreground (zona de pies)
-  const ys     = foreground.map(([, y]) => y);
-  const maxY   = Math.max(...ys);
-  const minY   = Math.min(...ys);
-  const yThresh = minY + (maxY - minY) * 0.60;
+  // Tomar solo el 25% más inferior (zona de zapatos, ignora jeans/piernas)
+  const ys      = foreground.map(([, y]) => y);
+  const maxY    = Math.max(...ys);
+  const minY    = Math.min(...ys);
+  const yThresh = minY + (maxY - minY) * 0.75;
   const footArea = foreground.filter(([, y]) => y >= yThresh);
 
   if (footArea.length < 60) return null;
