@@ -1,96 +1,146 @@
-// MediaPipe Pose Landmarker — detección de landmarks del pie
-// Landmarks usados:
-//   27 = left_heel   28 = right_heel
-//   29 = left_foot_index  30 = right_foot_index
-//   31 = left_toe_big     32 = right_toe_big (no en todos los modelos)
+// BodyPix — detección de pies desde vista cenital (top-down)
+// Partes: left_feet=22, right_feet=23
 
-const FOOT_LANDMARKS = {
-  left:  { heel: 29, toe: 31, ankle: 27 },
-  right: { heel: 30, toe: 32, ankle: 28 },
-};
+const PART_LEFT_FOOT  = 22;
+const PART_RIGHT_FOOT = 23;
 
-// Índices MediaPipe Pose 33-landmark
-const LEFT_HEEL        = 29;
-const RIGHT_HEEL       = 30;
-const LEFT_FOOT_INDEX  = 31;
-const RIGHT_FOOT_INDEX = 32;
-const LEFT_ANKLE       = 27;
-const RIGHT_ANKLE      = 28;
-const LEFT_KNEE        = 25;
-const RIGHT_KNEE       = 26;
+let net = null;
 
-let poseLandmarker = null;
-let lastResult     = null;
+async function initPose() {
+  net = await bodyPix.load({
+    architecture: 'MobileNetV1',
+    outputStride: 16,
+    multiplier: 0.75,
+    quantBytes: 2,
+  });
+  console.log('[pose] BodyPix listo');
+}
 
-async function initPose(wasmPath = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm') {
-  const { PoseLandmarker, FilesetResolver } = await import(
-    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/vision_bundle.js'
-  );
+// Retorna la segmentación de partes del cuerpo (async)
+async function detectPose(videoEl) {
+  if (!net) return null;
+  try {
+    return await net.segmentPersonParts(videoEl, {
+      flipHorizontal:      false,
+      internalResolution:  'medium',
+      segmentationThreshold: 0.5,
+      maxDetections:       2,
+      scoreThreshold:      0.3,
+      nmsRadius:           20,
+    });
+  } catch (e) {
+    console.warn('[pose] error en detección:', e.message);
+    return null;
+  }
+}
 
-  const vision = await FilesetResolver.forVisionTasks(wasmPath);
+// Extrae landmarks del pie desde la máscara de segmentación
+// Retorna { heel, toe, ankle } con coords normalizadas [0,1] o null
+function extractFootLandmarks(segmentation, side = 'right') {
+  if (!segmentation?.data) return null;
 
-  poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath:
-        'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task',
-      delegate: 'GPU',
-    },
-    runningMode:        'VIDEO',
-    numPoses:           1,
-    minPoseDetectionConfidence: 0.3,
-    minPosePresenceConfidence:  0.3,
-    minTrackingConfidence:      0.3,
+  const partId = side === 'left' ? PART_LEFT_FOOT : PART_RIGHT_FOOT;
+  const { data, width, height } = segmentation;
+
+  // Recolectar píxeles del pie
+  const pixels = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (data[y * width + x] === partId) pixels.push([x, y]);
+    }
+  }
+
+  // Fallback: si no hay píxeles de pie, usar la mitad inferior del torso
+  if (pixels.length < 30) {
+    return extractFromPersonBottom(segmentation, side);
+  }
+
+  return landmarksFromPixels(pixels, width, height, side);
+}
+
+// Fallback: buscar la región inferior de la persona cuando BodyPix no detecta el pie específico
+function extractFromPersonBottom(segmentation, side) {
+  const { data, width, height } = segmentation;
+
+  // Recolectar todos los píxeles de persona (cualquier parte != -1)
+  const allPerson = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (data[y * width + x] !== -1) allPerson.push([x, y]);
+    }
+  }
+
+  if (allPerson.length < 100) return null;
+
+  // Filtrar solo el 30% inferior de la imagen (zona de pies)
+  const yThreshold = height * 0.7;
+  const halfW = width / 2;
+  const footPixels = allPerson.filter(([x, y]) => {
+    if (y < yThreshold) return false;
+    return side === 'left' ? x < halfW : x >= halfW;
   });
 
-  console.log('[pose] MediaPipe PoseLandmarker listo');
+  if (footPixels.length < 30) {
+    // Sin filtro de lado
+    const bottomPixels = allPerson.filter(([, y]) => y >= yThreshold);
+    if (bottomPixels.length < 30) return null;
+    return landmarksFromPixels(bottomPixels, width, height, side);
+  }
+
+  return landmarksFromPixels(footPixels, width, height, side);
 }
 
-// Retorna landmarks crudos del pie para el lado indicado ('left' | 'right')
-// Coordenadas normalizadas [0,1] relativas al frame
-function detectPose(videoEl, timestampMs) {
-  if (!poseLandmarker) return null;
+// Calcula heel/toe/ankle desde un conjunto de píxeles usando PCA
+function landmarksFromPixels(pixels, width, height, side) {
+  // Centroide
+  let sumX = 0, sumY = 0;
+  for (const [x, y] of pixels) { sumX += x; sumY += y; }
+  const cx = sumX / pixels.length;
+  const cy = sumY / pixels.length;
 
-  const result = poseLandmarker.detectForVideo(videoEl, timestampMs);
-  lastResult = result;
+  // Covarianza para PCA (eje principal del pie)
+  let cxx = 0, cxy = 0, cyy = 0;
+  for (const [x, y] of pixels) {
+    const dx = x - cx, dy = y - cy;
+    cxx += dx * dx;
+    cxy += dx * dy;
+    cyy += dy * dy;
+  }
 
-  if (!result.landmarks || result.landmarks.length === 0) return null;
-  return result.landmarks[0]; // 33 landmarks del primer cuerpo detectado
-}
+  const angle = 0.5 * Math.atan2(2 * cxy, cxx - cyy);
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
 
-// Extrae los 6 landmarks clave del pie (heel, toe, ankle de cada pie)
-function extractFootLandmarks(allLandmarks, side = 'left') {
-  if (!allLandmarks) return null;
+  // Proyectar sobre eje principal → encontrar extremos (heel y toe)
+  let minProj = Infinity,  maxProj = -Infinity;
+  let heelPt  = [cx, cy], toePt   = [cx, cy];
 
-  const idx = side === 'left'
-    ? [LEFT_HEEL, LEFT_FOOT_INDEX, LEFT_ANKLE, LEFT_KNEE]
-    : [RIGHT_HEEL, RIGHT_FOOT_INDEX, RIGHT_ANKLE, RIGHT_KNEE];
-
-  const lms = idx.map(i => allLandmarks[i]);
-
-  // Verificar visibilidad mínima
-  // sin umbral de visibilidad — usar lo que haya
-  const minVis = Math.min(...lms.map(l => l.visibility ?? 0));
-  console.log(`[pose] foot visibility ${side}: ${minVis.toFixed(3)}`);
+  for (const [x, y] of pixels) {
+    const proj = (x - cx) * cos + (y - cy) * sin;
+    if (proj < minProj) { minProj = proj; heelPt = [x, y]; }
+    if (proj > maxProj) { maxProj = proj; toePt  = [x, y]; }
+  }
 
   return {
-    heel:   allLandmarks[idx[0]],
-    toe:    allLandmarks[idx[1]],
-    ankle:  allLandmarks[idx[2]],
-    knee:   allLandmarks[idx[3]],
+    heel:  { x: heelPt[0] / width, y: heelPt[1] / height, visibility: 1 },
+    toe:   { x: toePt[0]  / width, y: toePt[1]  / height, visibility: 1 },
+    ankle: { x: cx / width,        y: cy / height,         visibility: 1 },
     side,
   };
 }
 
-// Detecta qué pie está más visible para hacer try-on automático
-function detectDominantFoot(allLandmarks) {
-  if (!allLandmarks) return 'right';
+// Detecta qué pie tiene más píxeles (dominante)
+function detectDominantFoot(segmentation) {
+  if (!segmentation?.data) return 'right';
 
-  const leftVis  = (allLandmarks[LEFT_HEEL]?.visibility  ?? 0) +
-                   (allLandmarks[LEFT_FOOT_INDEX]?.visibility ?? 0);
-  const rightVis = (allLandmarks[RIGHT_HEEL]?.visibility ?? 0) +
-                   (allLandmarks[RIGHT_FOOT_INDEX]?.visibility ?? 0);
+  let leftCount = 0, rightCount = 0;
+  for (const v of segmentation.data) {
+    if (v === PART_LEFT_FOOT)  leftCount++;
+    if (v === PART_RIGHT_FOOT) rightCount++;
+  }
 
-  return leftVis > rightVis ? 'left' : 'right';
+  if (leftCount === 0 && rightCount === 0) return 'right';
+  return leftCount > rightCount ? 'left' : 'right';
 }
 
-export { initPose, detectPose, extractFootLandmarks, detectDominantFoot, FOOT_LANDMARKS };
+export { initPose, detectPose, extractFootLandmarks, detectDominantFoot };

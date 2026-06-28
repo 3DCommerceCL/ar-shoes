@@ -65,8 +65,8 @@ async function init() {
   measureGLBLength(shoe, THREE);
   buildOccluder(THREE);
 
-  // 5. Filtros (33 landmarks × {x,y,z})
-  filters = createLandmarkFilters(33, 30);
+  // 5. Filtros para heel/toe/ankle (3 puntos × {x,y})
+  filters = createLandmarkFilters(3, 30);
 
   // 6. UI events
   document.getElementById('btn-switch-foot').addEventListener('click', toggleFoot);
@@ -87,13 +87,13 @@ async function loop(timestamp) {
   frameCount++;
   const now = performance.now();
 
-  // A. Detección de pose
-  const allLandmarks = detectPose(videoEl, now);
+  // A. Segmentación BodyPix (async)
+  const segmentation = await detectPose(videoEl);
 
-  if (!allLandmarks) {
+  if (!segmentation) {
     noFootFrames++;
     if (noFootFrames > NO_FOOT_THRESHOLD) {
-      setStatus('Sin cuerpo detectado — asegúrate de que el torso sea visible');
+      setStatus('Apunta la cámara hacia tus pies desde arriba');
     }
     renderFrame();
     requestAnimationFrame(loop);
@@ -102,30 +102,26 @@ async function loop(timestamp) {
 
   noFootFrames = 0;
 
-  // Mostrar visibilidad de los landmarks del pie para diagnóstico
-  if (frameCount % 30 === 0) {
-    const lh = allLandmarks[29]?.visibility?.toFixed(2) ?? '?';
-    const rh = allLandmarks[30]?.visibility?.toFixed(2) ?? '?';
-    setStatus(`Cuerpo OK | pie-izq:${lh} pie-der:${rh} | apunta más abajo`);
-  }
-
-  // B. Detectar pie dominante automáticamente si no fue seleccionado manualmente
+  // B. Detectar pie dominante
   if (!window._footManualOverride) {
-    currentSide = detectDominantFoot(allLandmarks);
+    currentSide = detectDominantFoot(segmentation);
   }
 
-  // C. Filtrar landmarks
-  const filtered = applyFilters(filters, allLandmarks, now / 1000);
-
-  // D. Extraer landmarks del pie
-  const footLms = extractFootLandmarks(filtered, currentSide);
-  if (!footLms) {
+  // C. Extraer landmarks del pie desde segmentación
+  const rawLms = extractFootLandmarks(segmentation, currentSide);
+  if (!rawLms) {
+    setStatus('Muestra tus pies en la cámara');
     renderFrame();
     requestAnimationFrame(loop);
     return;
   }
 
-  setStatus(`Pie ${currentSide} detectado ✓ heel:(${footLms.heel.x.toFixed(2)},${footLms.heel.y.toFixed(2)})`);
+  // D. Suavizar landmarks con OneEuroFilter
+  const lmArray = [rawLms.heel, rawLms.toe, rawLms.ankle];
+  const smoothed = applyFilters(filters, lmArray, now / 1000);
+  const footLms = { heel: smoothed[0], toe: smoothed[1], ankle: smoothed[2], side: rawLms.side };
+
+  setStatus(`Pie ${currentSide} detectado ✓`);
 
   // E. Profundidad MiDaS (cada N frames)
   if (frameCount % DEPTH_EVERY === 0) {
