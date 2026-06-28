@@ -213,8 +213,112 @@
   <div>Users hacen try-on <span class="arrow">→</span> captura automática <span class="arrow">→</span> re-entrenar mensualmente</div>
 </div>
 
+<!-- ==================== DATASET: 3 FUENTES ==================== -->
+<h1>Fuentes de Datos — 3 Estrategias Combinadas</h1>
+
+<table>
+  <tr><th>Fuente</th><th>Cantidad</th><th>Ventaja</th><th>Script</th></tr>
+  <tr>
+    <td><strong>Videos reales</strong></td>
+    <td>~1,200 frames<br><small>(20 videos × 30s)</small></td>
+    <td>Variación natural de luz y movimiento. SAM2 labela el video completo con 1 clic.</td>
+    <td><code>0a_extract_frames.py</code></td>
+  </tr>
+  <tr>
+    <td><strong>Renders Blender 3D</strong></td>
+    <td>~5,000–50,000 renders</td>
+    <td>Máscara perfecta automática. Ángulos y luces infinitas. Sin labeling manual.</td>
+    <td><code>0b_blender_render.py</code></td>
+  </tr>
+  <tr>
+    <td><strong>Captura de usuarios</strong></td>
+    <td>Crece con el tiempo</td>
+    <td>Datos reales del mundo. Mejora continua del modelo en producción.</td>
+    <td><code>5_capture_dataset.js</code></td>
+  </tr>
+</table>
+
+<div class="flow" style="font-size:9.5pt;line-height:2">
+  <div><span class="highlight">Videos reales</span> → frames → SAM2 → máscaras</div>
+  <div>+ <span class="highlight">Renders Blender</span> → imágenes sintéticas → máscaras perfectas <span class="dim">(automático)</span></div>
+  <div>+ <span class="highlight">Captura usuarios</span> → frames reales en producción</div>
+  <div class="arrow">↓</div>
+  <div><span class="highlight">Dataset combinado</span> → Augmentación ×10 → <span class="highlight">100,000+ imágenes</span></div>
+</div>
+
+<!-- ==================== RENDERS SINTÉTICOS ==================== -->
+<h1>Renders Sintéticos con Blender — Domain Randomization</h1>
+
+<p>Técnica usada por 8th Wall, Meta, Google: renderizar el modelo 3D del pie en miles de configuraciones aleatorias. Cada render genera <strong>imagen + máscara perfecta automáticamente</strong>, sin ningún paso de etiquetado manual.</p>
+
+<h2>Qué se randomiza en cada render</h2>
+<table>
+  <tr><th>Variable</th><th>Rango</th><th>Por qué importa</th></tr>
+  <tr><td>Ángulo de cámara</td><td>0°–90° elevación, 360° azimut</td><td>El modelo ve pies desde todos los ángulos posibles</td></tr>
+  <tr><td>Distancia de cámara</td><td>30–110 cm</td><td>Distintas alturas al sostener el celular</td></tr>
+  <tr><td>Focal length</td><td>18–35 mm</td><td>Distintos celulares con distintas cámaras</td></tr>
+  <tr><td>Iluminación</td><td>Sol / punto / área / mixta</td><td>Interior, exterior, contraluz, sombra</td></tr>
+  <tr><td>Color de ambiente</td><td>Random 0.05–0.4</td><td>Distintas temperaturas de color</td></tr>
+  <tr><td>Textura de piso</td><td>8 colores predefinidos ±10%</td><td>Madera, cerámico, alfombra, cemento, etc.</td></tr>
+  <tr><td>Rotación del pie</td><td>±0.3 rad (~17°)</td><td>Distintas orientaciones al pararse</td></tr>
+  <tr><td>Escala del pie</td><td>85%–115%</td><td>Distintos tamaños de pie</td></tr>
+</table>
+
+<h2>Ventaja clave: el zapato shoe.glb ya lo tienes</h2>
+<p>El script puede colocar <code>shoe.glb</code> encima del modelo de pie en el render. Esto genera imágenes de "pie con zapato puesto" — exactamente lo que necesita el modelo para aprender a detectar el pie incluso cuando está cubierto por un zapato.</p>
+
+<h2>Cómo obtener el modelo 3D del pie</h2>
+<table>
+  <tr><th>Opción</th><th>Costo</th><th>Calidad</th><th>Link</th></tr>
+  <tr><td>Sketchfab (libre)</td><td>$0</td><td>Variable</td><td>sketchfab.com → buscar "human foot"</td></tr>
+  <tr><td>TurboSquid / CGTrader</td><td>$10–50</td><td>Alta</td><td>turbosquid.com</td></tr>
+  <tr><td>SMPL-X (académico)</td><td>$0</td><td>Muy alta</td><td>smpl-x.is.tue.mpg.de</td></tr>
+  <tr><td>Escaneo con app</td><td>$0–20/mes</td><td>Tu propio pie</td><td>Polycam, Luma AI, RealityCapture</td></tr>
+</table>
+
+<h2>Ejecutar el render</h2>
+<pre># Desde la línea de comandos (sin abrir Blender UI):
+"C:\Program Files\Blender Foundation\Blender 3.6\blender.exe" ^
+    --background --python 0b_blender_render.py -- ^
+    --foot models/foot.glb ^
+    --shoe ../models/shoe.glb ^
+    --out data_synthetic/ ^
+    --count 5000
+
+# Resultado:
+# data_synthetic/images/synth_00000.jpg  ← imagen realista
+# data_synthetic/images/synth_00000.png  ← máscara perfecta (sin SAM necesario)</pre>
+
+<h2>Tiempo estimado de render</h2>
+<table>
+  <tr><th>Hardware</th><th>5,000 renders</th><th>20,000 renders</th></tr>
+  <tr><td>CPU (i7/Ryzen 7)</td><td>~8–12 horas</td><td>~40 horas</td></tr>
+  <tr><td>GPU RTX 3060+</td><td>~1–2 horas</td><td>~6–8 horas</td></tr>
+  <tr><td>Google Colab T4</td><td>~2–3 horas</td><td>~10 horas</td></tr>
+</table>
+
+<!-- ==================== VIDEOS ==================== -->
+<h1>Videos Reales — Protocolo de Grabación</h1>
+
+<p>Videos son mejor que fotos: más variación natural y SAM2 propaga la máscara por todo el video con 1 solo clic.</p>
+
+<h2>20 videos de 30 segundos = ~1,200 frames base</h2>
+<table>
+  <tr><th>Videos</th><th>Descripción</th></tr>
+  <tr><td>4 videos</td><td>Cenital — cámara directa al suelo, pie quieto y luego moviéndose</td></tr>
+  <tr><td>4 videos</td><td>45° diagonal — sentado, cámara en la mano apuntando a los pies</td></tr>
+  <tr><td>3 videos</td><td>Frontal — cámara a altura de rodilla mirando los pies</td></tr>
+  <tr><td>3 videos</td><td>Caminando — distintos pisos (madera, cerámico, exterior)</td></tr>
+  <tr><td>3 videos</td><td>Distintos tipos de calzado, mismo ángulo cenital</td></tr>
+  <tr><td>3 videos</td><td>Distintas personas (mínimo 2–3 personas diferentes)</td></tr>
+</table>
+
+<pre>pip install opencv-python tqdm
+python 0a_extract_frames.py --videos_dir videos/ --every_n 15
+# Extrae 1 frame cada 15 → ~1,200 imágenes para SAM2</pre>
+
 <!-- ==================== FASE 1: FOTOS ==================== -->
-<h1>Fase 1 — Recolección de Fotos (100 base)</h1>
+<h1>Dataset Real (Opcional) — Fotos Adicionales</h1>
 
 <h2>Distribución por ángulo</h2>
 <table>
