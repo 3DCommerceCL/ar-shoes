@@ -77,6 +77,8 @@ async function init() {
 // ---- Loop de render — corre a 60fps sin bloqueos ----
 function renderLoop() {
   if (!isRunning) return;
+  // Recuperar video si iOS lo pausó
+  if (videoEl && videoEl.paused) videoEl.play().catch(() => {});
   try { renderFrame(); } catch(e) {}
   requestAnimationFrame(renderLoop);
 }
@@ -121,7 +123,7 @@ async function detectionLoop() {
     const scale = computeScaleFactor(footLms, null, videoEl.videoWidth, videoEl.videoHeight);
     updateShoeTransform(footLms, scale);
 
-    await sleep(120); // ~8fps de detección
+    await sleep(300); // ~3fps de detección — más estable en iOS
   }
 }
 

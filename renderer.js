@@ -66,17 +66,23 @@ async function loadShoeGLB(path, THREE, GLTFLoader) {
         box.getCenter(center);
         shoeModel.position.sub(center);
 
-        // Sin stencil — el zapato siempre visible cuando shoe.visible=true
+        // Materiales simplificados para iOS WebGL
         shoeModel.traverse(child => {
           if (child.isMesh) {
-            child.material = child.material.clone();
-            child.material.depthTest  = false;
-            child.material.depthWrite = false;
+            const oldMat = child.material;
+            // Reemplazar con MeshLambertMaterial simple para máxima compatibilidad
+            child.material = new THREE_ref.MeshLambertMaterial({
+              color: oldMat.color ?? 0xffffff,
+              map:   oldMat.map   ?? null,
+              depthTest:  true,
+              depthWrite: true,
+              side: THREE_ref.FrontSide,
+            });
           }
         });
 
         shoeModel.renderOrder = 2;
-        shoeModel.visible     = false;
+        shoeModel.visible     = true; // visible desde el inicio para verificar render
         scene.add(shoeModel);
 
         console.log('[renderer] GLB cargado:', path);
