@@ -1,159 +1,166 @@
 // app.js — orquestador principal del loop AR
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { initPose, detectPose, extractFootLandmarks, detectDominantFoot } from './pose.js';
-import { initDepth, estimateDepth }                                        from './depth.js';
-import { initSegmenter, getFootMask }                                      from './segmenter.js';
-import { createLandmarkFilters, applyFilters }                             from './filter.js';
-import { solvePose }                                                        from './solver.js';
-import { computeScaleFactor, measureGLBLength }                            from './scaler.js';
+import { initPose, detectPose, captureBackground, hasBgData,
+         extractFootLandmarks, detectDominantFoot } from './pose.js';
+import { createLandmarkFilters, applyFilters }      from './filter.js';
+import { computeScaleFactor, measureGLBLength }     from './scaler.js';
 import {
   initRenderer, loadShoeGLB, buildOccluder,
   updateShoeTransform, updateMask, renderFrame, setShoeOpacity,
 } from './renderer.js';
 
-// ---- Configuración ----
-const GLB_PATH    = './models/shoe.glb';
-const DEPTH_EVERY = 3;
-const STATUS_EL   = document.getElementById('status');
-
-function withTimeout(promise, ms, label) {
-  const timer = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error(`${label} timeout (${ms / 1000}s)`)), ms)
-  );
-  return Promise.race([promise, timer]);
-}
+const GLB_PATH  = './models/shoe.glb';
+const STATUS_EL = document.getElementById('status');
 
 let videoEl, canvasEl;
-let currentSide   = 'right';
-let depthMap      = null;
-let frameCount    = 0;
-let filters       = null;
-let isRunning     = false;
-let noFootFrames  = 0;
-const NO_FOOT_THRESHOLD = 60; // ~2s a 30fps
+let currentSide  = 'right';
+let filters      = null;
+let isRunning    = false;
+let noFootFrames = 0;
+const NO_FOOT_THRESHOLD = 15;
 
 // ---- Bootstrap ----
 async function init() {
-  setStatus('Iniciando cámara…');
-
   videoEl  = document.getElementById('video');
   canvasEl = document.getElementById('canvas');
 
-  // 1. Cámara
+  setLoadingMsg('Iniciando cámara…');
   await startCamera();
 
-  // 2. Three.js ya importado estáticamente arriba
-
-  // 3. Inicializar módulos — MiDaS y segmentador son opcionales
-  setStatus('Cargando segmentador…');
-  await withTimeout(initPose(), 30000, 'Segmentador')
-    .catch(e => console.warn('[app] segmentador falló:', e.message));
-  setStatus('Listo — apunta la cámara a tus pies');
-
-  // 4. Renderer + GLB
-  setStatus('Cargando zapato 3D…');
+  setLoadingMsg('Cargando zapato 3D…');
   initRenderer(canvasEl, videoEl, THREE, GLTFLoader);
+  await initPose();
   const shoe = await loadShoeGLB(GLB_PATH, THREE, GLTFLoader);
   measureGLBLength(shoe, THREE);
   buildOccluder(THREE);
 
-  // 5. Filtros para heel/toe/ankle (3 puntos × {x,y})
   filters = createLandmarkFilters(3, 30);
 
-  // 6. UI events
+  // UI events
   document.getElementById('btn-switch-foot').addEventListener('click', toggleFoot);
   document.getElementById('slider-opacity').addEventListener('input', e => {
     setShoeOpacity(parseFloat(e.target.value));
   });
+  document.getElementById('btn-calibrate').addEventListener('click', onCalibrate);
+  document.getElementById('btn-recalibrate').addEventListener('click', onRecalibrate);
 
-  setStatus('Apunta la cámara hacia tus pies');
-  window.dispatchEvent(new Event('ar-ready'));
-  isRunning = true;
-  requestAnimationFrame(renderLoop); // render a 60fps
-  detectionLoop();                   // detección a ~8fps en paralelo
+  // Ocultar loading, mostrar pantalla de calibración paso 1
+  document.getElementById('loading-screen').style.display = 'none';
+  showStep(1);
 }
 
-// ---- Loop de render — corre a 60fps sin bloqueos ----
+// ---- Calibración ----
+function onCalibrate() {
+  captureBackground(videoEl);
+  showStep(2);
+
+  // Iniciar loops
+  isRunning = true;
+  requestAnimationFrame(renderLoop);
+  detectionLoop();
+}
+
+function onRecalibrate() {
+  // Detener loop, volver a paso 1
+  isRunning = false;
+  updateShoeTransform(null); // ocultar zapato
+  setTimeout(() => {
+    isRunning = false;
+    showStep(1);
+  }, 100);
+}
+
+function showStep(n) {
+  document.getElementById('step-1').style.display = n === 1 ? 'flex' : 'none';
+  document.getElementById('step-2').style.display = n === 2 ? 'flex' : 'none';
+  // El UI normal solo se ve en paso 2
+  document.getElementById('ui').style.display = n === 2 ? 'flex' : 'none';
+}
+
+// ---- Loop de render — 60fps ----
 function renderLoop() {
   if (!isRunning) return;
-  // Recuperar video si iOS lo pausó
   if (videoEl && videoEl.paused) videoEl.play().catch(() => {});
   try { renderFrame(); } catch(e) {}
   requestAnimationFrame(renderLoop);
 }
 
-// ---- Loop de detección — corre a ~8fps, async, no bloquea el render ----
+// ---- Loop de detección — ~5fps ----
 async function detectionLoop() {
   while (isRunning) {
-    frameCount++;
     const now = performance.now();
+    const seg = detectPose(videoEl);
 
-    const segmentation = await detectPose(videoEl);
-
-    if (!segmentation) {
+    if (!seg) {
       noFootFrames++;
       if (noFootFrames > NO_FOOT_THRESHOLD) {
-        setStatus('Apunta la cámara hacia tus pies desde arriba');
+        setStatus('Pon tu pie en la cámara');
+        updateShoeTransform(null);
       }
-      await sleep(120);
+      await sleep(200);
+      continue;
+    }
+
+    // Contar píxeles significativos para feedback
+    let pixCount = 0;
+    for (let i = 0; i < seg.data.length; i++) {
+      if (seg.data[i] > 0.10) pixCount++;
+    }
+
+    if (pixCount < 150) {
+      noFootFrames++;
+      if (noFootFrames > NO_FOOT_THRESHOLD) {
+        setStatus('Pon tu pie en la cámara');
+        updateShoeTransform(null);
+      }
+      await sleep(200);
       continue;
     }
 
     noFootFrames = 0;
 
     if (!window._footManualOverride) {
-      currentSide = detectDominantFoot(segmentation);
+      currentSide = detectDominantFoot(seg);
     }
 
-    const rawLms = extractFootLandmarks(segmentation, currentSide);
+    const rawLms = extractFootLandmarks(seg, currentSide);
     if (!rawLms) {
-      setStatus('Muestra tus pies en la cámara');
-      await sleep(120);
+      setStatus('Centra el pie en la cámara');
+      await sleep(200);
       continue;
     }
 
-    // Suavizar con OneEuroFilter
     const lmArray  = [rawLms.heel, rawLms.toe, rawLms.ankle];
     const smoothed = applyFilters(filters, lmArray, now / 1000);
     const footLms  = { heel: smoothed[0], toe: smoothed[1], ankle: smoothed[2], side: rawLms.side };
 
-    setStatus(`Pie ${currentSide} detectado ✓`);
+    setStatus(`Pie ${currentSide === 'right' ? 'derecho' : 'izquierdo'} detectado ✓`);
 
     const scale = computeScaleFactor(footLms, null, videoEl.videoWidth, videoEl.videoHeight);
     updateShoeTransform(footLms, scale);
 
-    await sleep(300); // ~3fps de detección — más estable en iOS
+    await sleep(200);
   }
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-
 // ---- Cámara ----
 async function startCamera() {
-  const constraints = {
-    video: {
-      facingMode: { ideal: 'environment' },
-      width:  { ideal: 1280 },
-      height: { ideal: 720 },
-    },
-    audio: false,
-  };
-
   try {
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
     videoEl.srcObject = stream;
     await new Promise(res => videoEl.addEventListener('loadedmetadata', res, { once: true }));
     await videoEl.play();
   } catch (err) {
-    if (err.name === 'NotAllowedError') {
-      setStatus('Permiso de cámara denegado. Por favor permite el acceso.');
-    } else if (err.name === 'NotFoundError') {
-      setStatus('No se encontró cámara en este dispositivo.');
-    } else {
-      setStatus('Error de cámara: ' + err.message);
-    }
+    const msg = err.name === 'NotAllowedError'
+      ? 'Permiso de cámara denegado'
+      : 'Error de cámara: ' + err.message;
+    setLoadingMsg(msg);
     throw err;
   }
 }
@@ -168,16 +175,17 @@ function toggleFoot() {
 
 function setStatus(msg) {
   if (STATUS_EL) STATUS_EL.textContent = msg;
-  const loadingMsg = document.getElementById('loading-msg');
-  if (loadingMsg) loadingMsg.textContent = msg;
+}
+
+function setLoadingMsg(msg) {
+  const el = document.getElementById('loading-msg');
+  if (el) el.textContent = msg;
 }
 
 // ---- Arrancar ----
 window.addEventListener('DOMContentLoaded', () => {
   init().catch(err => {
     console.error('[app] Error fatal:', err);
-    setStatus('Error al iniciar: ' + err.message);
-    // Mostrar error visible en la pantalla de carga
     const loadingScreen = document.getElementById('loading-screen');
     if (loadingScreen) {
       loadingScreen.innerHTML = `

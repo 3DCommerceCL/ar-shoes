@@ -1,63 +1,51 @@
-// Detección de pies via segmentación MediaPipe
-// Estrategia: segmentar persona, encontrar píxeles inferiores = pies
+// Detección de pies via sustracción de fondo (background subtraction)
+// No requiere modelo ML — compara frame actual vs frame de referencia (piso vacío)
 
-let segmenter = null;
-let segCanvas = null;
-let segCtx    = null;
+let bgCanvas = null, bgCtx = null;
+let bgData   = null; // ImageData del fondo capturado
 
-async function initPose(wasmPath = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm') {
-  const { ImageSegmenter, FilesetResolver } = await import(
-    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/vision_bundle.js'
-  );
-  const vision = await FilesetResolver.forVisionTasks(wasmPath);
-
-  segmenter = await ImageSegmenter.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath:
-        'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite',
-      delegate: 'CPU',
-    },
-    runningMode:           'VIDEO',
-    outputCategoryMask:    false,
-    outputConfidenceMasks: true,
-  });
-
-  segCanvas     = document.createElement('canvas');
-  segCtx        = segCanvas.getContext('2d');
-  console.log('[pose] Segmentador listo');
+function initBgSubtraction() {
+  bgCanvas = document.createElement('canvas');
+  bgCanvas.width  = 256;
+  bgCanvas.height = 256;
+  bgCtx = bgCanvas.getContext('2d', { willReadFrequently: true });
 }
 
-let _processing = false;
-let _lastTs = 0;
+// Captura el frame actual como referencia de fondo (piso sin pie)
+function captureBackground(videoEl) {
+  if (!bgCtx) initBgSubtraction();
+  bgCtx.drawImage(videoEl, 0, 0, 256, 256);
+  const raw = bgCtx.getImageData(0, 0, 256, 256).data;
+  bgData = new Uint8ClampedArray(raw); // copia independiente
+  console.log('[pose] Fondo capturado');
+  return true;
+}
 
-// Retorna objeto segmentation con pixeles de persona, o null
-async function detectPose(videoEl) {
-  if (!segmenter || !videoEl.videoWidth || _processing) return null;
-  _processing = true;
-  try {
-    const ts = performance.now();
-    if (ts <= _lastTs) { _processing = false; return null; }
-    _lastTs = ts;
+function hasBgData() {
+  return bgData !== null;
+}
 
-    const result = segmenter.segmentForVideo(videoEl, ts);
-    if (!result?.confidenceMasks?.[0]) { _processing = false; return null; }
+// Retorna máscara de diferencia: 0 = igual al fondo, 1 = muy diferente (= pie)
+function detectPose(videoEl) {
+  if (!bgData || !bgCtx || !videoEl.videoWidth) return null;
 
-    const mask = result.confidenceMasks[0];
-    const data = mask.getAsFloat32Array();
-    const W    = mask.width;
-    const H    = mask.height;
-    mask.close();
+  bgCtx.drawImage(videoEl, 0, 0, 256, 256);
+  const current = bgCtx.getImageData(0, 0, 256, 256).data;
 
-    _processing = false;
-    return { data, width: W, height: H };
-  } catch (e) {
-    console.warn('[pose] segmentForVideo error:', e.message);
-    _processing = false;
-    return null;
+  const W = 256, H = 256;
+  const diff = new Float32Array(W * H);
+
+  for (let i = 0; i < W * H; i++) {
+    const r = Math.abs(current[i * 4]     - bgData[i * 4]);
+    const g = Math.abs(current[i * 4 + 1] - bgData[i * 4 + 1]);
+    const b = Math.abs(current[i * 4 + 2] - bgData[i * 4 + 2]);
+    diff[i] = (r + g + b) / (255 * 3); // 0-1
   }
+
+  return { data: diff, width: W, height: H };
 }
 
-// Detecta qué pie tiene más píxeles en su mitad de pantalla
+// Detecta qué pie (izquierdo/derecho) tiene más masa en la mitad inferior
 function detectDominantFoot(seg) {
   if (!seg) return 'right';
   const { data, width, height } = seg;
@@ -67,7 +55,7 @@ function detectDominantFoot(seg) {
 
   for (let y = yMin; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (data[y * width + x] > 0.5) {
+      if (data[y * width + x] > 0.10) {
         x < midX ? L++ : R++;
       }
     }
@@ -75,55 +63,42 @@ function detectDominantFoot(seg) {
   return L > R ? 'left' : 'right';
 }
 
-// Extrae heel/toe/ankle desde los píxeles inferiores del segmento de persona
+// Extrae heel/toe/ankle desde los píxeles que difieren del fondo
 function extractFootLandmarks(seg, side = 'right') {
   if (!seg) return null;
   const { data, width, height } = seg;
 
-  // Diagnóstico: calcular max confianza y cantidad de pixels por umbral
-  let maxConf = 0, px15 = 0, px30 = 0, px50 = 0;
-  for (let i = 0; i < data.length; i++) {
-    const v = data[i];
-    if (v > maxConf) maxConf = v;
-    if (v > 0.15) px15++;
-    if (v > 0.30) px30++;
-    if (v > 0.50) px50++;
-  }
-  // Mostrar en status para diagnóstico
-  const statusEl = document.getElementById('status');
-  if (statusEl) statusEl.textContent = `max:${maxConf.toFixed(2)} px15:${px15} px30:${px30} px50:${px50}`;
-
-  // Threshold muy bajo — aceptar cualquier señal del modelo
-  const person = [];
+  // Píxeles con diferencia significativa del fondo
+  const foreground = [];
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (data[y * width + x] > 0.15) person.push([x, y]);
+      if (data[y * width + x] > 0.10) foreground.push([x, y]);
     }
   }
-  if (person.length < 100) return null;
+  if (foreground.length < 150) return null;
 
-  // Tomar el 35% inferior del cuerpo segmentado (zona de pies)
-  const ys   = person.map(([, y]) => y);
-  const maxY = Math.max(...ys);
-  const minY = Math.min(...ys);
-  const yThresh = minY + (maxY - minY) * 0.65;
+  // Tomar el 40% inferior del bounding box de foreground (zona de pies)
+  const ys     = foreground.map(([, y]) => y);
+  const maxY   = Math.max(...ys);
+  const minY   = Math.min(...ys);
+  const yThresh = minY + (maxY - minY) * 0.60;
+  const footArea = foreground.filter(([, y]) => y >= yThresh);
 
-  const footArea = person.filter(([, y]) => y >= yThresh);
-  if (footArea.length < 30) return null;
+  if (footArea.length < 60) return null;
 
-  // Filtrar por lado (izquierdo/derecho)
-  const xs    = footArea.map(([x]) => x);
-  const midX  = (Math.min(...xs) + Math.max(...xs)) / 2;
+  // Filtrar por lado (izquierdo/derecho de la imagen)
+  const xs   = footArea.map(([x]) => x);
+  const midX = (Math.min(...xs) + Math.max(...xs)) / 2;
   const pixels = side === 'left'
     ? footArea.filter(([x]) => x < midX)
     : footArea.filter(([x]) => x >= midX);
 
-  const src = pixels.length >= 20 ? pixels : footArea;
+  const src = pixels.length >= 40 ? pixels : footArea;
 
   return landmarksFromPixels(src, width, height, side);
 }
 
-// Calcula heel/toe/ankle usando PCA sobre los píxeles del pie
+// PCA sobre el blob del pie → heel, toe, ankle
 function landmarksFromPixels(pixels, width, height, side) {
   let sumX = 0, sumY = 0;
   for (const [x, y] of pixels) { sumX += x; sumY += y; }
@@ -157,4 +132,10 @@ function landmarksFromPixels(pixels, width, height, side) {
   };
 }
 
-export { initPose, detectPose, extractFootLandmarks, detectDominantFoot };
+// initPose ahora es no-op (sin modelo ML)
+async function initPose() {
+  initBgSubtraction();
+  console.log('[pose] Sustracción de fondo lista');
+}
+
+export { initPose, detectPose, captureBackground, hasBgData, extractFootLandmarks, detectDominantFoot };

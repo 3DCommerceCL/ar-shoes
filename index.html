@@ -6,7 +6,6 @@
   <title>AR Shoe Try-On</title>
   <link rel="stylesheet" href="style.css" />
 
-  <!-- Import map: resuelve 'three' y 'three/addons/' para el browser -->
   <script type="importmap">
   {
     "imports": {
@@ -15,66 +14,54 @@
     }
   }
   </script>
-
-  <!-- ONNX Runtime Web (para MiDaS) -->
-  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.3/dist/ort.min.js"></script>
-
 </head>
 <body>
 
-  <!-- Feed de cámara (oculto visualmente, usado como fuente por Three.js) -->
   <video id="video" autoplay playsinline muted></video>
-
-  <!-- Canvas donde Three.js renderiza todo -->
   <canvas id="canvas"></canvas>
 
-  <!-- UI overlay -->
-  <div id="ui">
+  <!-- UI AR (visible solo durante uso) -->
+  <div id="ui" style="display:none">
     <div id="status-bar">
-      <span id="status">Iniciando…</span>
+      <span id="status">Detectando…</span>
     </div>
-
     <div id="controls">
       <button id="btn-switch-foot" type="button">Pie izquierdo</button>
-
+      <button id="btn-recalibrate" type="button">Recalibrar</button>
       <div id="opacity-control">
         <label for="slider-opacity">Opacidad</label>
-        <input
-          id="slider-opacity"
-          type="range"
-          min="0.1"
-          max="1"
-          step="0.05"
-          value="1"
-        />
+        <input id="slider-opacity" type="range" min="0.1" max="1" step="0.05" value="1" />
       </div>
     </div>
   </div>
 
-  <!-- Pantalla de carga -->
+  <!-- PASO 1: Calibrar fondo -->
+  <div id="step-1" class="step-screen" style="display:none">
+    <div class="step-card">
+      <div class="step-icon">📷</div>
+      <h2>Paso 1 de 2</h2>
+      <p>Apunta la cámara al <strong>piso vacío</strong> donde vas a pararte.</p>
+      <p class="step-hint">No pongas el pie aún — necesitamos ver solo el suelo.</p>
+      <button id="btn-calibrate" class="btn-primary">Calibrar fondo</button>
+    </div>
+  </div>
+
+  <!-- PASO 2: Poner el pie -->
+  <div id="step-2" class="step-screen" style="display:none">
+    <div class="step-card step-card--top">
+      <div class="step-icon">👟</div>
+      <h2>Paso 2 de 2</h2>
+      <p>Ahora <strong>pon tu pie</strong> en la cámara.</p>
+      <p class="step-hint">El zapato virtual aparecerá sobre tu pie en segundos.</p>
+    </div>
+  </div>
+
+  <!-- Pantalla de carga inicial -->
   <div id="loading-screen">
     <div class="spinner"></div>
     <p id="loading-msg">Cargando visor AR…</p>
   </div>
 
-  <!-- Overlay de error de permisos -->
-  <div id="permission-error" hidden>
-    <div class="error-box">
-      <p>Se necesita acceso a la cámara para usar el visor AR.</p>
-      <button onclick="location.reload()">Reintentar</button>
-    </div>
-  </div>
-
   <script type="module" src="app.js"></script>
-
-  <script>
-    // Ocultar pantalla de carga cuando app.js haya terminado de cargar los modelos
-    window.addEventListener('ar-ready', () => {
-      document.getElementById('loading-screen').style.display = 'none';
-    });
-
-    // Disparar evento desde app.js cuando esté listo
-    // (app.js llama: window.dispatchEvent(new Event('ar-ready')) tras init)
-  </script>
 </body>
 </html>
