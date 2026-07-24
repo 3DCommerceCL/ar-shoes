@@ -41,11 +41,13 @@ function initRenderer(canvas, videoEl, THREE, GLTFLoader) {
   dirLight.position.set(1, 2, 3);
   scene.add(ambLight, dirLight);
 
-  // Canvas 2D para debug de landmarks
-  debugCanvas = document.createElement('canvas');
-  debugCanvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:5';
-  document.body.appendChild(debugCanvas);
-  debugCtx = debugCanvas.getContext('2d');
+  // Canvas 2D para debug de landmarks — solo con ?debug=1 en producción
+  if (new URLSearchParams(location.search).get('debug') === '1') {
+    debugCanvas = document.createElement('canvas');
+    debugCanvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:5';
+    document.body.appendChild(debugCanvas);
+    debugCtx = debugCanvas.getContext('2d');
+  }
 
   window.addEventListener('resize', () => onResize(canvas));
 

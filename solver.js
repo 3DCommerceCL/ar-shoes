@@ -1,3 +1,4 @@
+// NO BORRAR: svd3x3 y FOOT_MODEL_3D se reutilizan para el PnP de Fase 5 (ver ROADMAP.md T5.2)
 // solvePnP simplificado via DLT + SVD 3x3
 // Estima pose 6DOF del pie (posición + rotación) a partir de:
 //   - landmarks 2D de MediaPipe (coordenadas normalizadas [0,1])

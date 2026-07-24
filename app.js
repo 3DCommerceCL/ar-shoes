@@ -1,10 +1,9 @@
 // app.js — orquestador principal del loop AR
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { initPose, detectPose, captureBackground, hasBgData,
+import { initPose, detectPose, captureBackground,
          extractFootLandmarks, detectDominantFoot } from './pose.js';
 import { createLandmarkFilters, applyFilters }      from './filter.js';
-import { computeScaleFactor, measureGLBLength }     from './scaler.js';
 import {
   initRenderer, loadShoeGLB, buildOccluder,
   updateShoeTransform, updateMask, renderFrame, setShoeOpacity,
@@ -19,7 +18,6 @@ let filters        = null;
 let isRunning      = false;
 let noFootFrames   = 0;
 let firstDetected  = false;
-let lastFootLms    = null; // última posición válida del pie
 const NO_FOOT_THRESHOLD = 20; // ~4s antes de ocultar zapato
 
 // ---- Bootstrap ----
@@ -33,8 +31,7 @@ async function init() {
   setLoadingMsg('Cargando zapato 3D…');
   initRenderer(canvasEl, videoEl, THREE, GLTFLoader);
   await initPose();
-  const shoe = await loadShoeGLB(GLB_PATH, THREE, GLTFLoader);
-  measureGLBLength(shoe, THREE);
+  await loadShoeGLB(GLB_PATH, THREE, GLTFLoader);
   buildOccluder(THREE);
 
   filters = createLandmarkFilters(3, 30);
@@ -99,7 +96,6 @@ async function detectionLoop() {
       if (noFootFrames > NO_FOOT_THRESHOLD) {
         setStatus('Pon tu pie en la cámara ↓');
         updateShoeTransform(null);
-        lastFootLms = null;
       }
       await sleep(200);
       continue;
@@ -115,7 +111,6 @@ async function detectionLoop() {
       if (noFootFrames > NO_FOOT_THRESHOLD) {
         setStatus('Pon tu pie en la cámara ↓');
         updateShoeTransform(null);
-        lastFootLms = null;
       }
       await sleep(200);
       continue;
@@ -130,7 +125,6 @@ async function detectionLoop() {
       bboxW: rawLms.bboxW, bboxH: rawLms.bboxH,
       side: rawLms.side,
     };
-    lastFootLms = footLms;
 
     setStatus(`Pie ${currentSide === 'right' ? 'derecho' : 'izquierdo'} detectado ✓`);
 
@@ -192,9 +186,11 @@ window.addEventListener('DOMContentLoaded', () => {
       loadingScreen.innerHTML = `
         <div style="padding:24px;text-align:center;color:#fff;max-width:320px">
           <p style="font-size:16px;margin-bottom:12px">Error al iniciar</p>
-          <p style="font-size:13px;opacity:0.7;word-break:break-all">${err.message}</p>
+          <p id="err-detail" style="font-size:13px;opacity:0.7;word-break:break-all"></p>
           <button onclick="location.reload()" style="margin-top:20px;padding:10px 24px;border-radius:20px;border:none;background:#fff;color:#000;font-size:15px;font-weight:600">Reintentar</button>
         </div>`;
+      const detail = document.getElementById('err-detail');
+      if (detail) detail.textContent = err.message; // textContent evita inyección de HTML
     }
   });
 });
