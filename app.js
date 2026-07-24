@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { initPose, detectPose, captureBackground,
-         extractFootLandmarks, detectDominantFoot } from './pose.js';
+         extractFootLandmarks, detectDominantFoot, isCameraMoved } from './pose.js';
 import { createLandmarkFilters, applyFilters }      from './filter.js';
 import {
   initRenderer, loadShoeGLB, buildOccluder,
@@ -18,7 +18,10 @@ let filters        = null;
 let isRunning      = false;
 let noFootFrames   = 0;
 let firstDetected  = false;
+let sideCandidate      = null; // lado propuesto para el cambio con histéresis
+let sideCandidateCount = 0;
 const NO_FOOT_THRESHOLD = 20; // ~4s antes de ocultar zapato
+const SIDE_SWITCH_FRAMES = 5;  // ciclos consecutivos para confirmar cambio de pie
 
 // ---- Bootstrap ----
 async function init() {
@@ -63,6 +66,8 @@ function onCalibrate() {
 function onRecalibrate() {
   isRunning    = false;
   firstDetected = false;
+  filters = createLandmarkFilters(3, 30); // no arrastrar el estado del filtro tras recalibrar
+  sideCandidate = null; sideCandidateCount = 0;
   updateShoeTransform(null);
   setTimeout(() => {
     isRunning = false;
@@ -94,15 +99,29 @@ async function detectionLoop() {
     if (!seg) {
       noFootFrames++;
       if (noFootFrames > NO_FOOT_THRESHOLD) {
-        setStatus('Pon tu pie en la cámara ↓');
+        setStatus(isCameraMoved()
+          ? 'La cámara se movió — reencuadra hacia el piso'
+          : 'Pon tu pie en la cámara ↓');
         updateShoeTransform(null);
       }
       await sleep(200);
       continue;
     }
 
+    // Cambio de pie con histéresis: solo cambia tras varios ciclos consecutivos coincidentes
     if (!window._footManualOverride) {
-      currentSide = detectDominantFoot(seg);
+      const detected = detectDominantFoot(seg);
+      if (detected === currentSide) {
+        sideCandidate = null; sideCandidateCount = 0;
+      } else if (detected === sideCandidate) {
+        if (++sideCandidateCount >= SIDE_SWITCH_FRAMES) {
+          currentSide = detected;
+          filters = createLandmarkFilters(3, 30); // el pie cambió: reiniciar el filtro
+          sideCandidate = null; sideCandidateCount = 0;
+        }
+      } else {
+        sideCandidate = detected; sideCandidateCount = 1;
+      }
     }
 
     const rawLms = extractFootLandmarks(seg, currentSide);
@@ -164,6 +183,8 @@ async function startCamera() {
 function toggleFoot() {
   currentSide = currentSide === 'right' ? 'left' : 'right';
   window._footManualOverride = true;
+  filters = createLandmarkFilters(3, 30); // no arrastrar el filtro del pie anterior
+  sideCandidate = null; sideCandidateCount = 0;
   document.getElementById('btn-switch-foot').textContent =
     currentSide === 'right' ? 'Pie izquierdo' : 'Pie derecho';
 }
