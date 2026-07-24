@@ -9,7 +9,7 @@ import {
   updateShoeTransform, updateMask, renderFrame, setShoeOpacity,
 } from './renderer.js';
 
-const GLB_PATH  = './models/shoe.glb';
+const GLB_PATH  = './models/shoe_web.glb';
 const STATUS_EL = document.getElementById('status');
 
 let videoEl, canvasEl;
