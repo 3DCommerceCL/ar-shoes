@@ -1,3 +1,17 @@
 node_modules/
 .DS_Store
 Thumbs.db
+
+# artefactos de entrenamiento (los datasets y checkpoints no van al repo)
+__pycache__/
+training/__pycache__/
+training/data_synthetic/
+training/data_smoke_test/
+training/data/images/
+training/data/masks/
+training/data/keypoints.jsonl
+training/data_test_frozen/
+training/*.pth
+training/*.onnx
+training/*.meta.json
+training/preview.html

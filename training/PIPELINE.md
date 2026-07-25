@@ -1,157 +1,83 @@
-# Pipeline de entrenamiento — AR Shoe Try-On
+# Pipeline de entrenamiento — AR Shoe Try-On (v2)
 
-## Resumen del flujo
+Modelo objetivo: **red multi-branch** (encoder MobileNetV2 compartido) con dos cabezas —
+(a) **keypoints** del pie (6 heatmaps) y (b) **segmentación multiclase** {fondo, pierna, pie, zapato}.
+Los keypoints alimentan PnP (pose 6DoF, `solver.js`); la máscara sirve para oclusión. Es la receta de
+ARShoe (arXiv 2108.10515) y Springer-2025. Ver [../ROADMAP.md](../ROADMAP.md) para el plan completo y los gates.
+
+> Cambios vs. v1: ya **no** es segmentación binaria, ya **no** hay augmentación estática 100→100k
+> (ahora es on-the-fly en el `Dataset`), y los scripts se renombraron a nombres importables.
 
 ```
-100 fotos → SAM auto-label → 100,000 augmentadas → Entrenar → ONNX → Browser
-                                                                         ↑
-                              Users try-on → capturas → re-entrenar ────┘
+Blender (0b) ─┐
+              ├─► images/ + masks/{0,1,2,3} + keypoints.jsonl ─► train_model.py ─► export_onnx.py ─► models/foot_net_int8.onnx ─► inference.js (browser)
+Fotos SAM (2) ┘                                                        ▲
+                                                            augmentación on-the-fly
 ```
 
----
+## Formato de datos (único para sintético y real)
 
-## Fase 1: Recolección de fotos (100 fotos base)
-
-### Ángulos requeridos (distribuir equitativamente):
-| Ángulo | % del dataset | Descripción |
-|--------|--------------|-------------|
-| Cenital (desde arriba) | 40% | Cámara apuntando directo al suelo |
-| 45° diagonal | 30% | Ángulo típico de selfie de pies |
-| Frontal | 20% | Cámara a altura de rodilla mirando los pies |
-| Lateral | 10% | Vista desde el costado |
-
-### Diversidad necesaria:
-- **Personas:** min. 5 personas distintas (diferente tono de piel, tamaño de pie)
-- **Calzado:** zapatillas, zapatos, botas, sandalias, medias, pie descalzo
-- **Pisos:** madera, cerámico, alfombra, cemento, exterior
-- **Iluminación:** natural, artificial, mixta, contraluz suave
-- **Distancia:** 30cm, 60cm, 90cm, 120cm desde la cámara
-
-### Herramienta de etiquetado:
-```bash
-cd training/
-pip install segment-anything opencv-python torch torchvision tqdm
-wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
-python 2_sam_label.py --checkpoint sam_vit_b_01ec64.pth
 ```
-- Clic izquierdo en el pie → máscara automática
-- `S` para guardar, `R` para resetear, `Q` para salir
-- Tiempo estimado: **2-3 horas para 100 fotos**
+<data_dir>/images/<stem>.jpg|png
+<data_dir>/masks/<stem>.png        # PNG uint8 con índices {0 fondo, 1 pierna, 2 pie, 3 zapato}
+<data_dir>/keypoints.jsonl         # {"file":"<stem>.jpg","kps":[[x,y,vis]×6]}  (x,y normalizados)
+```
+Keypoints en orden: `heel, toe, ankle_in, ankle_out, ball, toe_tip`.
+Normalización fija: `mean=[0.485,0.456,0.406] std=[0.229,0.224,0.225]` (la misma que usa `inference.js`).
 
----
-
-## Fase 2: Augmentación (100 → 100,000)
+## Fase 0b — Render sintético (Blender 5.1)
 
 ```bash
-pip install albumentations opencv-python Pillow tqdm
-python 1_augment.py
+"C:/Program Files/Blender Foundation/Blender 5.1/blender.exe" --background --python 0b_blender_render.py -- \
+    --foot models/foot.glb --shoe ../models/shoe.glb --out data_synthetic --count 5000 --seed 42 \
+    --shoe_dir models/shoes --hdri_dir hdri --floor_dir floor_textures
+# preview de 20 con contact-sheet para inspección visual:
+... --preview
 ```
+- Pie + zapato se transforman JUNTOS (Empty raíz, sin reescalar GLBs — regla dura #1).
+- Máscara por emisión de color (pierna=R, pie=G, zapato=B) + view transform `Raw` → índices exactos, sin clases fantasma.
+- Keypoints GT: usa los Empties `kp_*` del GLB si existen; si no, los coloca por bbox. Proyección con oclusión.
+- Degradación tipo cámara móvil (JPEG q40-85, ruido, motion blur, viñeteo, balance de blancos) — numpy, in-Blender.
+- HDRIs (Poly Haven CC0) y texturas de piso si se pasan las carpetas; si no, fallback a luces/colores.
 
-- Tiempo: **~30-60 minutos** en CPU
-- Disco: ~15GB para 100,000 imágenes JPEG
-- Variaciones: rotación, flip, brillo, contraste, perspectiva, blur, fondo sintético
-
----
-
-## Fase 3: Entrenamiento
+## Fase 2 — Fotos reales (SAM, multiclase + keypoints)
 
 ```bash
-pip install torch torchvision tqdm scikit-learn Pillow
-python 3_train_model.py --epochs 30
+pip install segment-anything opencv-python torch torchvision numpy
+# checkpoint: wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
+python 2_sam_label.py --checkpoint sam_vit_b_01ec64.pth   # 1/2/3 clase, K keypoints, S guardar
+python 2_sam_label.py --review                            # control de calidad
 ```
+Ver [PROTOCOLO_FOTOS.md](PROTOCOLO_FOTOS.md) para qué fotos sacar. **50 se congelan** como test set (T3.6).
 
-| Hardware | Tiempo 30 epochs | Costo |
-|---------|-----------------|-------|
-| CPU local | ~40 horas | $0 |
-| Google Colab T4 (gratis) | ~6-8 horas | $0 |
-| Google Colab A100 (Pro) | ~2-3 horas | ~$5 |
-| Runpod A100 | ~1-2 horas | ~$3 |
+## Fase 3 — Entrenamiento
 
-**Recomendación: Google Colab** (subir scripts + data_augmented/ a Google Drive)
+```bash
+pip install torch torchvision albumentations opencv-python numpy pillow tqdm
+python train_model.py --smoke                              # test de humo sin dataset (datos dummy)
+python train_model.py --data_dir data_synthetic --epochs 30
+```
+- Arquitectura: MobileNetV2 (canales detectados dinámicamente) + decoder U-Net + 2 cabezas.
+- Pérdida: CrossEntropy + Dice (seg) + MSE de heatmaps (kp). Métricas: mIoU, IoU(pie∪zapato), PCK@0.1.
+- Split **por imagen base** (sin fuga); augmentación **on-the-fly**; mejor checkpoint por mIoU.
 
----
-
-## Fase 4: Export a ONNX
+## Fase 4 — Export a ONNX
 
 ```bash
 pip install onnx onnxruntime
-python 4_export_onnx.py --checkpoint foot_model.pth
-# Genera: models/foot_segmenter.onnx (~5MB)
+python export_onnx.py --checkpoint foot_model.pth --output ../models/foot_net.onnx --int8
+# genera foot_net_int8.onnx (~2.7 MB) + foot_net_int8.meta.json
 ```
 
----
+## Fase 5 — Probar en el navegador
 
-## Fase 5: Integrar en la app AR
+Abrir `../test_inference.html` (servido por HTTP), cargar el `.onnx`: corre con onnxruntime-web
+(WebGPU con fallback WASM) y dibuja la máscara + keypoints. La integración en la app AR es la Fase 5 del ROADMAP.
 
-Una vez generado `models/foot_segmenter.onnx`, reemplazar el background 
-subtraction en `pose.js` con el modelo ONNX:
+## Métricas objetivo (medir SOBRE el test set real congelado)
 
-```js
-// pose.js — con modelo ONNX propio
-import { InferenceSession, Tensor } from 'onnxruntime-web';
-
-let session = null;
-export async function initPose() {
-  session = await InferenceSession.create('./models/foot_segmenter.onnx');
-}
-
-export async function detectPose(videoEl) {
-  // Preprocesar video → tensor 1×3×256×256
-  const tensor = preprocessVideo(videoEl);
-  const result = await session.run({ input: tensor });
-  const mask   = result.output.data; // Float32Array 256×256
-  return { data: mask, width: 256, height: 256 };
-  // Usar exactamente igual que el background subtraction actual
-}
-```
-
-**Sin cambios en renderer.js ni app.js** — el mismo `extractFootLandmarks()` funciona.
-
----
-
-## Fase 6: Aprendizaje continuo
-
-Agregar en `app.js`:
-```js
-import { initCapture, captureFrame, downloadDataset } from './training/5_capture_dataset.js';
-initCapture();
-
-// En detectionLoop, cuando detección es exitosa:
-captureFrame(videoEl, footLms); // guarda en IndexedDB del browser
-```
-
-Agregar botón en la UI:
-```html
-<button onclick="downloadDataset()">Exportar dataset (para re-entrenar)</button>
-```
-
-**Ciclo de mejora:**
-1. App en producción captura frames automáticamente (cada 2s durante try-on)
-2. Mensualmente: usuario descarga ZIP con todos los frames
-3. Añadir esas imágenes a `data_augmented/` (ya vienen con landmarks como labels)
-4. Re-entrenar: `python 3_train_model.py --epochs 10` (fine-tuning rápido)
-5. Exportar nuevo ONNX y subir a GitHub Pages
-
----
-
-## Métricas objetivo
-
-| Métrica | Objetivo |
-|---------|---------|
-| IoU (Intersection over Union) | > 0.85 |
-| Inference time en móvil | < 40ms |
-| Falsos positivos (pared/mueble) | < 5% |
-| Detección desde ángulo cenital | > 90% |
-
----
-
-## Costo total estimado
-
-| Item | Costo |
-|------|-------|
-| Fotos (tiempo propio) | $0 |
-| SAM labeling (Colab) | $0 |
-| Augmentación (local) | $0 |
-| Entrenamiento (Colab Pro 1 mes) | $10 |
-| Storage GitHub LFS para ONNX | $0 (< 100MB) |
-| **Total** | **~$10** |
+| Métrica | Gate |
+|---------|------|
+| IoU (pie ∪ zapato) | > 0.85 (G4b) / > 0.6-0.7 en el piloto (G4a) |
+| PCK@0.1 keypoints | > 0.85 |
+| Inferencia móvil (WebGPU) | < 80 ms |
