@@ -313,8 +313,13 @@ def pck_batch(kp_pred, kps_gt, thresh=0.1):
 # CARGA DE MUESTRAS / SPLIT
 # =====================================================================
 def _base_stem(stem):
-    """Agrupa variantes augmentadas por imagen base (por si el dataset trae sufijos _aug_XXXX)."""
-    return stem.split("_aug_")[0]
+    """Agrupa por contenido base para el split sin fuga:
+    - variantes augmentadas:      foto01_aug_0003   → foto01
+    - frames del mismo video:     clip01_f0042      → clip01  (2b_sam2_video.py; fuga temporal si se separan)
+    """
+    import re
+    stem = stem.split("_aug_")[0]
+    return re.sub(r"_f\d+$", "", stem)
 
 
 def load_samples(data_dir):

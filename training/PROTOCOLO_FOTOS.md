@@ -1,4 +1,27 @@
-# Protocolo de recolección de fotos reales
+# Protocolo de recolección de fotos y VIDEOS reales
+
+## ⭐ VIDEOS (vía principal desde 2026-07-25 — etiquetado masivo con SAM2)
+
+Un video de 30s = ~900 frames. Con SAM2 (`2b_sam2_video.py`) se clickea pie/zapato/pierna **una vez**
+y la máscara se propaga sola a todo el video → cientos de frames etiquetados por minuto de trabajo.
+Es la misma estrategia de datos de los SDKs comerciales (Wanna/Kivisense).
+
+**Qué grabar (clips de 20-40s, cámara de teléfono, 1080p, 30fps):**
+- La persona **de pie**, cámara en mano apuntando a los propios pies (POV real del try-on): caminar
+  en el lugar, girar el pie, puntas adentro/afuera, levantar el talón, un paso adelante/atrás.
+- Otra persona filmando desde ~1m: cenital, diagonal y lateral, moviendo la cámara lento.
+- Variar TODO entre clips (no dentro del clip): persona, calzado (y descalzo/calcetines), piso, luz,
+  pantalón largo/corto/arremangado.
+- **Objetivo inicial: 20-30 clips** (≥5 personas). Eso son ~4.000-8.000 frames etiquetables.
+
+**Reglas:** movimientos LENTOS (motion blur arruina la propagación de SAM2), el pie siempre dentro del
+frame, un solo pie protagonista por clip (v1 del modelo es de una instancia), sin rostros en cuadro.
+Guardar los .mp4 en `training/data_videos/`. Luego: `python 2b_sam2_video.py --video data_videos/clip01.mp4`.
+
+Las FOTOS siguen siendo necesarias para el **test set congelado** (T3.6) y para keypoints de calidad —
+el protocolo de abajo sigue vigente.
+
+---
 
 Objetivo: **300-500 fotos reales** diversas para (a) fine-tuning del modelo tras el pre-training sintético y (b) el **test set congelado** (ver [ROADMAP.md](../ROADMAP.md) T3.6). Sin estas fotos no hay forma de medir el éxito real del modelo — el sintético solo no basta.
 

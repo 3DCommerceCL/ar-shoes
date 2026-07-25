@@ -170,6 +170,17 @@ Prueba mental de regresión: la firma pública de pose.js no cambia. Commitea.
 
 # FASE 1 — Demo pública estable con MediaPipe (1-2 semanas)
 
+> **⚠️ RESUELTO 2026-07-25 — MediaPipe DESCARTADO para el caso de uso real (verificado empíricamente).**
+> Experimento controlado (Pose Landmarker lite 0.10.35, umbrales mínimos 0.25, chromium headless):
+> con **persona completa** detecta con visibilidad de pies 0.84; con recorte a rodillas cae a 0.33;
+> con **solo pies NO detecta**, y con una foto real **POV cintura-abajo** (el encuadre del try-on,
+> jeans+zapatillas nítidas) **NO detecta nada** en ningún recorte. Causa estructural: el person-detector
+> ancla en cara/torso. Coincide con la QA en dispositivo del usuario y con el histórico del repo
+> (`4f56d70`→`0d809a7`). **Decisión del usuario: proceder directo con el modelo propio (Fases 3-4),
+> que es la receta Wanna/Kivisense.** La demo de Pages queda desplegada como demo técnica limitada
+> (funciona con encuadre de cuerpo casi completo) pero NO es el producto. T1.4/F2: el outreach se
+> hará con la demo del modelo propio o material grabado, no con la demo MediaPipe.
+
 ### T1.1 — Sustituir sustracción de fondo por MediaPipe Pose Landmarker `[OPUS]`
 **Depende de:** T0.3. **Entregable:** `pose.js` reescrito sobre MediaPipe manteniendo la API; sin pantalla de calibración.
 **Criterio de aceptación:** el zapato sigue al pie SIN calibrar fondo, sobrevive a movimiento de cámara, funciona con la app servida por `npx serve` o GitHub Pages en un móvil real.
@@ -288,6 +299,10 @@ para proyectos pequeños) es el benchmark comercial barato.
 ---
 
 # FASE 2 — Validación de demanda (2 semanas) — **GATE G2**
+
+> **Nota 2026-07-25:** con MediaPipe descartado (ver Fase 1), la demo en vivo para outreach será la del
+> modelo propio (post-G4a). El usuario decidió asumir el build sin esperar G2; el gate se mantiene como
+> límite del GASTO GRANDE (batch 5000 / GPU) pero el trabajo de datos con videos+SAM2 (T3.7) procede ya.
 
 ### T2.1 — Landing + widget de ejemplo embebido `[SONNET]`
 **Depende de:** T1.3. **Entregable:** `landing/index.html` estática: propuesta de valor, demo embebida (iframe del try-on), CTA de contacto.
@@ -493,6 +508,25 @@ Actualiza las instrucciones de PIPELINE.md (sección Fase 1). Commitea en featur
 ### T3.6 — Etiquetar y CONGELAR el test set real `[HUMANO]` (etiquetado) + `[SONNET]` (estructura y validación)
 **Depende de:** T3.4 (herramienta) + primeras ~60 fotos de T3.5. **Entregable:** `training/data_test_frozen/` con 50 fotos etiquetadas (máscara multi-clase + keypoints, formato del Dataset de T3.1).
 **Regla de oro: este set se CONGELA — la métrica de éxito del proyecto (G4a, G4b) se mide SIEMPRE aquí, nunca en sintético ni augmentado, y estas 50 fotos JAMÁS entran al train ni al fine-tuning.** El humano etiqueta (~2-3h con la herramienta de T3.4); Sonnet valida el formato, verifica que las 50 cubren la distribución de ángulos/pisos del protocolo, escribe `training/data_test_frozen/FROZEN.md` con el hash de cada archivo, y añade un check en train_model.py que ABORTA si detecta archivos de data_test_frozen en el data_dir de entrenamiento.
+
+### T3.7 — Etiquetado masivo de VIDEOS con SAM2 `[OPUS]` (script) + `[HUMANO]` (grabar videos y clics)
+**Añadida 2026-07-25 tras descartar MediaPipe — es la vía principal de datos reales (receta Wanna/Kivisense que pidió el usuario).**
+**Depende de:** T3.1 (formato de datos). **Entregable:** `training/2b_sam2_video.py` + sección de VIDEOS en PROTOCOLO_FOTOS.md.
+**Idea:** un video de 30s a 30fps = ~900 frames; con SAM2 se clickea el pie/zapato/pierna en UN frame y la máscara se propaga sola a todo el video → cientos de frames etiquetados por minuto de trabajo humano, vs ~2 min/foto con SAM1. Los keypoints se clickean solo en 1 de cada N frames (o vienen del sintético — el modelo tolera muestras sin keypoints, w_kp=0).
+
+**Prompt:**
+```
+Tarea T3.7 del ROADMAP.md. Crea training/2b_sam2_video.py sobre facebookresearch/sam2 (verificar
+checkpoint/API/licencia vigentes antes): (1) toma un video (mp4) + N clics del usuario en el primer
+frame por clase (pierna/pie/zapato, UI cv2 como 2_sam_label.py), (2) propaga las 3 máscaras con el
+video predictor de SAM2 a todos los frames, (3) exporta 1 de cada --stride frames (default 5) al
+formato del Dataset de T3.1: images/<video>_fNNNN.jpg + masks/*.png (índices {0,1,2,3}) +
+keypoints.jsonl (vacío para estos frames — w_kp=0), (4) --review con overlay para descartar frames
+donde la propagación falló, (5) modo CPU funcional en Windows (checkpoint tiny/small) aunque lento;
+documentar tiempo estimado por video. El split por imagen base de train_model.py ya agrupa por stem:
+verificar que <video>_fNNNN comparte stem base por video (ajustar _base_stem si hace falta) para que
+frames del mismo video NUNCA queden repartidos entre train y val (fuga temporal).
+```
 
 ### **GATE G3 — Smoke test end-to-end `[OPUS]`**
 **Depende de:** T3.1, T3.2, T3.3. **Criterio: TODO verde o no se avanza a Fase 4.**
