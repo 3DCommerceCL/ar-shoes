@@ -9,7 +9,7 @@ import { PoseLandmarker, FilesetResolver }
 const WASM_URL  = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task';
 
-const MIN_VIS = 0.5; // visibilidad media mínima para dar un pie por válido
+const MIN_VIS = 0.3; // visibilidad media mínima para dar un pie por válido (bajo: encuadres de pies)
 
 let landmarker    = null;
 let lastVideoTime = -1;
@@ -22,6 +22,11 @@ async function initPose() {
     baseOptions: { modelAssetPath: MODEL_URL, delegate },
     runningMode: 'VIDEO',
     numPoses: 1, // los dos pies del mismo cuerpo llegan en una sola pose
+    // Umbrales bajos: MediaPipe Pose está entrenado para cuerpo entero; con encuadres de
+    // piernas+pies hay que ser permisivo para que acepte una detección parcial.
+    minPoseDetectionConfidence: 0.25,
+    minPosePresenceConfidence: 0.25,
+    minTrackingConfidence: 0.25,
   });
 
   // GPU por defecto; en iOS puede conflictuar con el WebGL de Three.js → fallback a CPU

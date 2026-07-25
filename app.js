@@ -23,7 +23,7 @@ let sideCandidateCount = 0;
 const NO_FOOT_THRESHOLD  = 45; // ~3s (a ~15Hz) sin pie antes de ocultar el zapato
 const SIDE_SWITCH_FRAMES = 5;  // ciclos consecutivos para confirmar cambio de pie
 const DETECT_INTERVAL_MS = 66; // ~15 Hz de detección
-const NO_FOOT_HINT = 'Apunta la cámara a tus pies e incluí la pierna ↓';
+const NO_FOOT_HINT = 'Mostrá tus piernas y pies (de rodillas para abajo), alejá la cámara ↓';
 
 // ---- Bootstrap ----
 async function init() {
