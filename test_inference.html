@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FootNet · test de inferencia</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #111; color: #eee; }
+  header { padding: 12px 16px; background: #1c1c1c; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  header input[type=text] { flex: 1; min-width: 220px; padding: 6px 8px; background: #000; color: #eee; border: 1px solid #444; border-radius: 6px; }
+  button { padding: 7px 14px; border: none; border-radius: 6px; background: #3a7; color: #000; font-weight: 600; cursor: pointer; }
+  button.sec { background: #345; color: #eee; }
+  #stage { position: relative; display: inline-block; margin: 16px; }
+  canvas { max-width: 96vw; border: 1px solid #333; background: #000; }
+  #stats { padding: 8px 16px; font-family: ui-monospace, monospace; font-size: 13px; color: #9c9; white-space: pre; }
+  .legend { display: inline-flex; gap: 12px; padding: 4px 16px; font-size: 12px; }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+  video { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <label>Modelo: <input id="model-url" type="text" value="./models/foot_net_int8.onnx" /></label>
+  <button id="btn-load">Cargar modelo</button>
+  <button id="btn-file" class="sec">Imagen…</button>
+  <button id="btn-cam" class="sec">Webcam</button>
+  <button id="btn-stop" class="sec">Stop</button>
+  <input id="file" type="file" accept="image/*" style="display:none" />
+</header>
+
+<div class="legend">
+  <span><span class="sw" style="background:#000"></span>fondo</span>
+  <span><span class="sw" style="background:#4488ff"></span>pierna</span>
+  <span><span class="sw" style="background:#ff5555"></span>pie</span>
+  <span><span class="sw" style="background:#33dd88"></span>zapato</span>
+  <span>· keypoints en amarillo</span>
+</div>
+
+<div id="stage"><canvas id="out" width="512" height="512"></canvas></div>
+<div id="stats">Cargá un modelo para empezar.</div>
+
+<video id="video" autoplay playsinline muted></video>
+
+<script type="module">
+import { initInference, runInference, getActiveEP } from './inference.js';
+
+const CLASS_COLORS = [null, [68,136,255], [255,85,85], [51,221,136]]; // null=fondo transparente
+const KP_NAMES = ['heel','toe','ankle_in','ankle_out','ball','toe_tip'];
+const INPUT = 256;
+
+const canvas = document.getElementById('out');
+const ctx = canvas.getContext('2d');
+const video = document.getElementById('video');
+const statsEl = document.getElementById('stats');
+const modelUrl = document.getElementById('model-url');
+
+let ready = false, loopOn = false;
+const lat = [];
+
+document.getElementById('btn-load').onclick = async () => {
+  statsEl.textContent = 'Cargando modelo…';
+  try {
+    const metaUrl = modelUrl.value.replace(/\.onnx$/, '.meta.json');
+    const ep = await initInference(modelUrl.value, metaUrl);
+    ready = true;
+    statsEl.textContent = `Modelo cargado. EP activo: ${ep}. Elegí Imagen o Webcam.`;
+  } catch (e) {
+    statsEl.textContent = 'Error cargando el modelo: ' + e.message;
+  }
+};
+
+document.getElementById('btn-file').onclick = () => document.getElementById('file').click();
+document.getElementById('file').onchange = (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const img = new Image();
+  img.onload = () => { stopLoop(); drawResult(img); };
+  img.src = URL.createObjectURL(f);
+};
+
+document.getElementById('btn-cam').onclick = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+    loopOn = true;
+    loop();
+  } catch (e) { statsEl.textContent = 'Cámara: ' + e.message; }
+};
+document.getElementById('btn-stop').onclick = stopLoop;
+
+function stopLoop() {
+  loopOn = false;
+  if (video.srcObject) { video.srcObject.getTracks().forEach(t => t.stop()); video.srcObject = null; }
+}
+
+async function loop() {
+  if (!loopOn) return;
+  if (video.videoWidth) await drawResult(video);
+  requestAnimationFrame(loop);
+}
+
+async function drawResult(src) {
+  if (!ready) { statsEl.textContent = 'Cargá un modelo primero.'; return; }
+  const r = await runInference(src);
+
+  // dibujar la imagen (recorte cuadrado central) a 512
+  const w = src.videoWidth || src.naturalWidth || src.width;
+  const h = src.videoHeight || src.naturalHeight || src.height;
+  const s = Math.min(w, h), sx = (w - s) / 2, sy = (h - s) / 2;
+  ctx.drawImage(src, sx, sy, s, s, 0, 0, 512, 512);
+
+  // overlay de máscara (256 → 512)
+  const mimg = ctx.createImageData(INPUT, INPUT);
+  for (let p = 0; p < INPUT * INPUT; p++) {
+    const c = CLASS_COLORS[r.seg[p]];
+    if (c) { mimg.data[p*4]=c[0]; mimg.data[p*4+1]=c[1]; mimg.data[p*4+2]=c[2]; mimg.data[p*4+3]=120; }
+  }
+  const tmp = document.createElement('canvas'); tmp.width = INPUT; tmp.height = INPUT;
+  tmp.getContext('2d').putImageData(mimg, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(tmp, 0, 0, 512, 512);
+
+  // keypoints: r.kps están en coords del frame completo → convertir a coords del recorte (0..512)
+  ctx.fillStyle = '#ffdd00'; ctx.strokeStyle = '#000'; ctx.font = '11px monospace';
+  r.kps.forEach(([fx, fy, conf], i) => {
+    const cx = ((fx * w) - sx) / s * 512;
+    const cy = ((fy * h) - sy) / s * 512;
+    ctx.beginPath(); ctx.arc(cx, cy, 5, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.fillText(`${KP_NAMES[i]} ${conf.toFixed(2)}`, cx + 7, cy + 3);
+    ctx.fillStyle = '#ffdd00';
+  });
+
+  lat.push(r.latencyMs); if (lat.length > 30) lat.shift();
+  const avg = lat.reduce((a, b) => a + b, 0) / lat.length;
+  statsEl.textContent = `EP: ${r.ep} | latencia: ${r.latencyMs.toFixed(1)}ms (avg30 ${avg.toFixed(1)}ms) | ` +
+    `kps conf: ${r.kps.map(k => k[2].toFixed(2)).join(' ')}`;
+}
+</script>
+</body>
+</html>
