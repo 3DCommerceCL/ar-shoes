@@ -7,6 +7,8 @@ __pycache__/
 training/__pycache__/
 training/data_synthetic/
 training/data_smoke_test/
+training/data_preview/
+training/data_videos/
 training/data/images/
 training/data/masks/
 training/data/keypoints.jsonl
