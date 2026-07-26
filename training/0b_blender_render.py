@@ -508,13 +508,33 @@ def main():
         if o.parent is None:
             o.parent = root
 
-    # pierna: colecciones leg_* del GLB si existen
-    leg_collections = {}
-    for coll in bpy.data.collections:
-        if coll.name.lower().startswith("leg_"):
-            leg_collections[coll.name] = [o for o in coll.objects if o.type == 'MESH']
-    leg_objs = leg_collections if leg_collections else []
-    print(f"Pierna: {list(leg_collections.keys()) or 'ninguna colección leg_* (máscara sin pierna)'}")
+    # pierna: variantes por NOMBRE DE OBJETO leg_* (las colecciones NO sobreviven el export a GLB).
+    # Agrupa por nombre base sin sufijo numérico de Blender (leg_bare.001 → leg_bare) e incluye
+    # los hijos MESH de un objeto/empty que matchee (permite parentar la tela bajo un empty leg_pants_dark).
+    def _descendant_meshes(o):
+        out = [o] if o.type == 'MESH' else []
+        for ch in o.children:
+            out += _descendant_meshes(ch)
+        return out
+
+    leg_groups = {}
+    for o in foot_objs:
+        base = o.name.lower().split('.')[0]
+        if base.startswith("leg_"):
+            leg_groups.setdefault(base, [])
+            for m in _descendant_meshes(o):
+                if m not in leg_groups[base]:
+                    leg_groups[base].append(m)
+    # fallback: colecciones (solo útil corriendo dentro de un .blend, no tras importar GLB)
+    if not leg_groups:
+        for coll in bpy.data.collections:
+            if coll.name.lower().startswith("leg_"):
+                leg_groups[coll.name.lower()] = [o for o in coll.objects if o.type == 'MESH']
+    # los meshes de pierna NO son parte del "pie" para keypoints/máscara de pie
+    leg_meshes = {m for objs in leg_groups.values() for m in objs}
+    foot_objs = [o for o in foot_objs if o not in leg_meshes]
+    leg_objs = leg_groups if leg_groups else []
+    print(f"Pierna: {list(leg_groups.keys()) or 'ningún objeto leg_* (máscara sin pierna)'}")
 
     # zapatos: --shoe_dir (varios) o --shoe (uno). Cada GLB YA viene alineado al pie (regla #1).
     shoe_variants = {}
