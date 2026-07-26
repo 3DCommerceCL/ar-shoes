@@ -13,7 +13,9 @@ training/data/images/
 training/data/masks/
 training/data/keypoints.jsonl
 training/data_test_frozen/
+training/checkpoints/
 training/*.pth
+training/*.pt
 training/*.onnx
 training/*.meta.json
 training/preview.html

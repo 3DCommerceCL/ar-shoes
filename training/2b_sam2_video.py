@@ -23,8 +23,12 @@ Instalación (una vez):
     #   https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
 
 Uso:
-    python 2b_sam2_video.py --video data_videos/clip01.mp4 --checkpoint sam2.1_hiera_tiny.pt
+    python 2b_sam2_video.py --video data_videos/clip01.mp4
     python 2b_sam2_video.py --review --out data              # control de calidad de lo exportado
+
+Rendimiento medido (checkpoint tiny, CPU de este equipo): ~9.5 s/frame a 320px — a 1024px es varias
+veces más. Para CPU: usar --extract_stride 3 y --max_side 640 (un clip de 30s queda en ~100 frames
+procesados). Para lotes grandes conviene GPU (Colab: sube el script + videos, cambia --device cuda).
 
 Controles (ventana del primer frame):
     1 / 2 / 3    clase activa (pierna / pie / zapato)
@@ -57,21 +61,24 @@ MAX_DISP = 960
 # ---------------------------------------------------------------------
 # extracción de frames (SAM2 init_state espera un dir de JPEGs numerados)
 # ---------------------------------------------------------------------
-def extract_frames(video_path, tmp_dir, max_side=1024):
+def extract_frames(video_path, tmp_dir, max_side=1024, extract_stride=1):
+    """Extrae 1 de cada extract_stride frames del video, renumerados consecutivos (SAM2 los exige así)."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise SystemExit(f"No pude abrir el video: {video_path}")
-    n = 0
+    n = src = 0
     while True:
         ok, frame = cap.read()
         if not ok:
             break
-        h, w = frame.shape[:2]
-        if max(h, w) > max_side:
-            s = max_side / max(h, w)
-            frame = cv2.resize(frame, (int(w * s), int(h * s)))
-        cv2.imwrite(str(tmp_dir / f"{n:05d}.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
-        n += 1
+        if src % extract_stride == 0:
+            h, w = frame.shape[:2]
+            if max(h, w) > max_side:
+                s = max_side / max(h, w)
+                frame = cv2.resize(frame, (int(w * s), int(h * s)))
+            cv2.imwrite(str(tmp_dir / f"{n:05d}.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
+            n += 1
+        src += 1
     cap.release()
     if n == 0:
         raise SystemExit("El video no tiene frames legibles")
@@ -200,8 +207,11 @@ def main():
     ap = argparse.ArgumentParser(description="Etiquetado masivo de videos con SAM2")
     ap.add_argument("--video", help="clip .mp4 a etiquetar")
     ap.add_argument("--out", default="data", help="carpeta de salida (images/ + masks/)")
-    ap.add_argument("--stride", type=int, default=5, help="exportar 1 de cada N frames")
-    ap.add_argument("--checkpoint", default="sam2.1_hiera_tiny.pt")
+    ap.add_argument("--stride", type=int, default=5, help="exportar 1 de cada N frames procesados")
+    ap.add_argument("--extract_stride", type=int, default=1,
+                    help="procesar 1 de cada N frames del video (subí a 3 en CPU)")
+    ap.add_argument("--max_side", type=int, default=1024, help="lado máximo de frame (bajá a 640 en CPU)")
+    ap.add_argument("--checkpoint", default="checkpoints/sam2.1_hiera_tiny.pt")
     ap.add_argument("--config", default="configs/sam2.1/sam2.1_hiera_t.yaml",
                     help="config del checkpoint (t/s/b+/l deben coincidir)")
     ap.add_argument("--device", default=None, help="cuda|cpu (default: auto)")
@@ -233,8 +243,8 @@ def main():
 
     tmp = Path(tempfile.mkdtemp(prefix="sam2_frames_"))
     try:
-        n = extract_frames(video, tmp)
-        print(f"{n} frames extraídos de {video.name}")
+        n = extract_frames(video, tmp, max_side=args.max_side, extract_stride=args.extract_stride)
+        print(f"{n} frames extraídos de {video.name} (extract_stride {args.extract_stride}, max {args.max_side}px)")
         first = cv2.imread(str(tmp / "00000.jpg"))
         clicks = collect_clicks(first)
         print(f"Propagando clases {sorted(clicks.keys())} con SAM2 ({n} frames)…")
