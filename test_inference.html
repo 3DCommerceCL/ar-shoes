@@ -42,10 +42,15 @@
 <video id="video" autoplay playsinline muted></video>
 
 <script type="module">
-import { initInference, runInference, getActiveEP } from './inference.js';
+import { initInference, runInference, getActiveEP, getMeta } from './inference.js';
 
 const CLASS_COLORS = [null, [68,136,255], [255,85,85], [51,221,136]]; // null=fondo transparente
-const KP_NAMES = ['heel','toe','ankle_in','ankle_out','ball','toe_tip'];
+const KP_BASE = ['heel','toe','ankle_in','ankle_out','ball','toe_tip'];
+const kpName = (i, n) => {
+  const meta = getMeta();
+  if (meta?.keypoints?.[i]) return meta.keypoints[i];
+  return n === 12 ? `${i < 6 ? 'L' : 'R'}_${KP_BASE[i % 6]}` : KP_BASE[i] || `kp${i}`;
+};
 const INPUT = 256;
 
 const canvas = document.getElementById('out');
@@ -120,14 +125,15 @@ async function drawResult(src) {
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(tmp, 0, 0, 512, 512);
 
-  // keypoints: r.kps están en coords del frame completo → convertir a coords del recorte (0..512)
-  ctx.fillStyle = '#ffdd00'; ctx.strokeStyle = '#000'; ctx.font = '11px monospace';
+  // keypoints: coords del frame completo → coords del recorte (0..512); izq amarillo, der cian
+  ctx.strokeStyle = '#000'; ctx.font = '11px monospace';
   r.kps.forEach(([fx, fy, conf], i) => {
+    if (conf < 0.2) return;   // heatmap apagado = ese pie/punto no está
     const cx = ((fx * w) - sx) / s * 512;
     const cy = ((fy * h) - sy) / s * 512;
+    ctx.fillStyle = (r.numKp === 12 && i >= 6) ? '#33ddff' : '#ffdd00';
     ctx.beginPath(); ctx.arc(cx, cy, 5, 0, 7); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#fff'; ctx.fillText(`${KP_NAMES[i]} ${conf.toFixed(2)}`, cx + 7, cy + 3);
-    ctx.fillStyle = '#ffdd00';
+    ctx.fillStyle = '#fff'; ctx.fillText(`${kpName(i, r.numKp)} ${conf.toFixed(2)}`, cx + 7, cy + 3);
   });
 
   lat.push(r.latencyMs); if (lat.length > 30) lat.shift();

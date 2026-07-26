@@ -3,18 +3,23 @@ PASO 3 — Entrenar el modelo de pie (multi-branch: keypoints + segmentación mu
 =======================================================================================
 Reemplaza al viejo 3_train_model.py (segmentación binaria, encoder roto).
 
-Arquitectura (receta ARShoe / Springer-2025):
+Arquitectura (receta ARShoe / Springer-2025) — UN solo modelo para ambos pies:
     Encoder MobileNetV2 compartido  →  dos cabezas:
       (a) SEGMENTACIÓN multiclase 256×256, 4 clases {0 fondo, 1 pierna/pantalón, 2 pie, 3 zapato}
-      (b) KEYPOINTS: 6 heatmaps 64×64  {heel, toe, ankle_in, ankle_out, ball, toe_tip}
-    Los keypoints alimentan PnP (solver.js) para pose 6DoF; la máscara sirve para oclusión.
+          (sin lado: un pie es un pie; la máscara sirve para oclusión)
+      (b) KEYPOINTS: 12 heatmaps 64×64 = 6 por lado {heel, toe, ankle_in, ankle_out, ball, toe_tip}
+          × {left, right} — un solo forward detecta ambos pies Y su lado. Los modos de la app
+          (ambos pies / izq / der) son filtros de render, NO modelos distintos.
+    ankle_in = maléolo MEDIAL (anatómico, no relativo a pantalla): así el espejo de un pie derecho
+    es un pie izquierdo válido y el flip de augmentación genera el lado contrario gratis.
 
-Formato de datos (idéntico para sintético de Blender y fotos reales SAM):
+Formato de datos v2 (idéntico para sintético de Blender y fotos reales SAM):
     <data_dir>/images/*.jpg|png
     <data_dir>/masks/<stem>.png        (PNG uint8 con índices {0,1,2,3})
     <data_dir>/keypoints.jsonl         (una línea por imagen:
-                                        {"file": "synth_00001.jpg", "kps": [[x,y,vis], ... x6]}
-                                        x,y normalizados [0,1]; vis 0/1)
+                                        {"file": "x.jpg", "kps": {"left": [[x,y,vis]×6]|null,
+                                                                  "right": [[x,y,vis]×6]|null}}
+                                        x,y normalizados [0,1]; vis 0/1; lado ausente = null)
 
 Normalización FIJA del proyecto (la misma que usa inference.js):
     mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225]   (ImageNet)
@@ -45,8 +50,11 @@ except Exception:
 IMG_SIZE      = 256
 HEATMAP_SIZE  = 64
 NUM_CLASSES   = 4          # 0 fondo, 1 pierna/pantalón, 2 pie, 3 zapato
-KP_NAMES      = ["heel", "toe", "ankle_in", "ankle_out", "ball", "toe_tip"]
-NUM_KP        = len(KP_NAMES)
+KP_NAMES_ONE  = ["heel", "toe", "ankle_in", "ankle_out", "ball", "toe_tip"]  # ankle_in = MEDIAL
+KP_PER_FOOT   = len(KP_NAMES_ONE)
+SIDES         = ["left", "right"]   # orden de los bloques en el tensor: [left×6, right×6]
+KP_NAMES      = [f"{s}_{n}" for s in SIDES for n in KP_NAMES_ONE]
+NUM_KP        = len(KP_NAMES)       # 12
 HEATMAP_SIGMA = 2.0        # px (en resolución de heatmap)
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
@@ -56,6 +64,34 @@ FROZEN_DIR    = "data_test_frozen"   # jamás debe entrar al entrenamiento (ver 
 # =====================================================================
 # GENERACIÓN DE HEATMAPS
 # =====================================================================
+def kps_to_array(raw):
+    """Formato v2 {'left': [...]|None, 'right': [...]|None} → array (12,3).
+    Compat: una lista suelta (formato v1 de un solo pie) se asume pie DERECHO."""
+    arr = np.zeros((NUM_KP, 3), np.float32)
+    if raw is None:
+        return arr
+    if isinstance(raw, list):                      # legacy v1
+        arr[KP_PER_FOOT:2 * KP_PER_FOOT] = np.asarray(raw, np.float32)[:KP_PER_FOOT]
+        return arr
+    for si, side in enumerate(SIDES):
+        block = raw.get(side)
+        if block:
+            arr[si * KP_PER_FOOT:(si + 1) * KP_PER_FOOT] = np.asarray(block, np.float32)[:KP_PER_FOOT]
+    return arr
+
+
+def flip_lr(image, mask, kps):
+    """Espejo horizontal: imagen+máscara con fliplr, kps x→1-x y bloques left↔right intercambiados.
+    Válido porque ankle_in/out son anatómicos (medial/lateral): el espejo de un pie derecho ES un izquierdo."""
+    image = np.ascontiguousarray(image[:, ::-1])
+    mask  = np.ascontiguousarray(mask[:, ::-1])
+    out = kps.copy()
+    out[:, 0] = np.where(kps[:, 2] > 0, 1.0 - kps[:, 0], kps[:, 0])
+    L, R = out[:KP_PER_FOOT].copy(), out[KP_PER_FOOT:2 * KP_PER_FOOT].copy()
+    out[:KP_PER_FOOT], out[KP_PER_FOOT:2 * KP_PER_FOOT] = R, L
+    return image, mask, out
+
+
 def make_heatmaps(kps, size=HEATMAP_SIZE, sigma=HEATMAP_SIGMA):
     """kps: array (NUM_KP, 3) con x,y normalizados [0,1] y vis. Devuelve (NUM_KP,size,size) float32."""
     hm = np.zeros((NUM_KP, size, size), dtype=np.float32)
@@ -99,13 +135,16 @@ class FootDataset:
         if isinstance(s["img"], np.ndarray):          # muestra dummy (smoke)
             image = s["img"]
             mask  = s["mask"]
-            kps   = np.asarray(s["kps"], dtype=np.float32)
+            kps   = kps_to_array(s["kps"])
         else:
             image = cv2.cvtColor(cv2.imread(str(s["img"])), cv2.COLOR_BGR2RGB)
             m = cv2.imread(str(s["mask"]), cv2.IMREAD_GRAYSCALE)
             mask = m if m is not None else np.zeros(image.shape[:2], np.uint8)
-            kps = np.asarray(s["kps"], dtype=np.float32) if s["kps"] is not None \
-                else np.zeros((NUM_KP, 3), np.float32)
+            kps = kps_to_array(s["kps"])
+
+        # Flip horizontal (50%): genera el pie del lado contrario gratis (swap de bloques L/R)
+        if self.augment and np.random.random() < 0.5:
+            image, mask, kps = flip_lr(image, mask, kps)
 
         h, w = image.shape[:2]
         # keypoints normalizados → píxeles para albumentations
@@ -139,7 +178,8 @@ class FootDataset:
 
 def _build_augmenter(img_size):
     import albumentations as A
-    # NOTA: sin HorizontalFlip — intercambiaría la semántica ankle_in/ankle_out de los keypoints.
+    # NOTA: el flip horizontal NO va acá — se hace en __getitem__ (flip_lr) porque además de
+    # espejar la imagen hay que intercambiar los bloques de keypoints left↔right.
     return A.Compose(
         [
             A.Affine(scale=(0.75, 1.25), translate_percent=(-0.12, 0.12),
@@ -285,27 +325,30 @@ def update_iou_stats(stats, seg_logits, mask):
 
 
 def pck_batch(kp_pred, kps_gt, thresh=0.1):
-    """PCK@thresh: correcto si dist(pred,gt) < thresh * largo_del_pie (heel→toe). Devuelve (correctos, total)."""
+    """PCK@thresh por lado: correcto si dist(pred,gt) < thresh * largo_del_pie DE ESE LADO
+    (heel→toe del bloque). Devuelve (correctos, total)."""
     import torch
     B = kp_pred.shape[0]
     S = kp_pred.shape[-1]
     correct = total = 0
     for b in range(B):
-        gt = kps_gt[b]                         # (6,3)
-        heel, toe = gt[0, :2], gt[1, :2]
-        foot_len = float(torch.norm(heel - toe)) if (gt[0, 2] > 0 and gt[1, 2] > 0) else 0.0
-        if foot_len < 1e-3:
-            foot_len = 0.25                    # fallback: ~pie normalizado
-        for i in range(NUM_KP):
-            if gt[i, 2] <= 0:
-                continue
-            hm = kp_pred[b, i]
-            idx = int(torch.argmax(hm))
-            py, px = divmod(idx, S)
-            pred = torch.tensor([px / S, py / S], device=gt.device)
-            if float(torch.norm(pred - gt[i, :2])) < thresh * foot_len:
-                correct += 1
-            total += 1
+        gt = kps_gt[b]                         # (12,3): [left×6, right×6]
+        for blk in range(len(SIDES)):
+            o = blk * KP_PER_FOOT
+            heel, toe = gt[o + 0], gt[o + 1]
+            foot_len = float(torch.norm(heel[:2] - toe[:2])) if (heel[2] > 0 and toe[2] > 0) else 0.0
+            if foot_len < 1e-3:
+                foot_len = 0.25                # fallback: ~pie normalizado
+            for i in range(o, o + KP_PER_FOOT):
+                if gt[i, 2] <= 0:
+                    continue
+                hm = kp_pred[b, i]
+                idx = int(torch.argmax(hm))
+                py, px = divmod(idx, S)
+                pred = torch.tensor([px / S, py / S], device=gt.device)
+                if float(torch.norm(pred - gt[i, :2])) < thresh * foot_len:
+                    correct += 1
+                total += 1
     return correct, total
 
 
@@ -376,12 +419,13 @@ def make_dummy_samples(n=20, seed=0):
         mask[y0:y0 + h, x0:x0 + w] = 2                                # pie
         mask[y0 + h // 2:y0 + h, x0:x0 + w] = 3                       # zapato (mitad inferior)
         mask[max(0, y0 - 30):y0, x0:x0 + w] = 1                       # pierna
-        kps = []
-        for _i in range(NUM_KP):
+        block = []
+        for _i in range(KP_PER_FOOT):
             kx = (x0 + rng.integers(0, w)) / IMG_SIZE
             ky = (y0 + rng.integers(0, h)) / IMG_SIZE
-            kps.append([float(kx), float(ky), 1.0])
-        out.append({"img": img, "mask": mask, "kps": kps})
+            block.append([float(kx), float(ky), 1.0])
+        side = SIDES[int(rng.integers(0, 2))]   # un pie por muestra, lado aleatorio (v2)
+        out.append({"img": img, "mask": mask, "kps": {side: block}})
     return out
 
 

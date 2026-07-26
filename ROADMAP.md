@@ -54,9 +54,14 @@ REGLAS DURAS (no negociables):
 5. No lanzar el batch de 5000 renders sin pasar el GATE G4a (piloto con IoU real > 0.6-0.7).
 6. Commits: mensajes cortos en inglés como los existentes (git log), trabajo en la rama indicada por la tarea.
 
-DECISIÓN ARQUITECTÓNICA CENTRAL (auditoría 2026-07-23):
+DECISIÓN ARQUITECTÓNICA CENTRAL (auditoría 2026-07-23; ampliada 2026-07-26):
 El target final del modelo NO es segmentación binaria: es una red multi-branch (encoder compartido) con
 (a) heatmaps de keypoints anatómicos del pie y (b) máscara MULTI-CLASE {fondo, pierna/pantalón, pie, zapato}.
+UN SOLO MODELO para ambos pies: el head de keypoints emite 12 heatmaps (6 izquierdo + 6 derecho) — un
+forward detecta ambos pies Y su lado. Los modos de producto (ambos pies / solo izq / solo der) son
+FILTROS DE RENDER en app.js, NO modelos distintos; el zapato izquierdo es el GLB derecho espejado
+(scale.x=-1 en el Group contenedor, T5.3). ankle_in = maléolo MEDIAL (anatómico): el flip horizontal
+de la augmentación genera el pie contrario gratis intercambiando los bloques L/R de labels.
 Los keypoints alimentan PnP (solver.js) contra un modelo canónico del pie => pose 6DoF real (R|t) del pie;
 la máscara sirve para OCLUSIÓN (pierna tapa la caña) y a futuro shoe-erasing. Es la receta de ARShoe
 (arXiv 2108.10515), Springer 2025 (s40747-025-02188-x) y de los SDKs comerciales (Wanna/Vyking/Snap).

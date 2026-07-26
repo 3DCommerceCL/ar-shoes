@@ -14,8 +14,10 @@ Es la misma estrategia de datos de los SDKs comerciales (Wanna/Kivisense).
   pantalón largo/corto/arremangado.
 - **Objetivo inicial: 20-30 clips** (≥5 personas). Eso son ~4.000-8.000 frames etiquetables.
 
-**Reglas:** movimientos LENTOS (motion blur arruina la propagación de SAM2), el pie siempre dentro del
-frame, un solo pie protagonista por clip (v1 del modelo es de una instancia), sin rostros en cuadro.
+**Reglas:** movimientos LENTOS (motion blur arruina la propagación de SAM2), los pies siempre dentro del
+frame, sin rostros en cuadro. Pueden aparecer AMBOS pies (el modelo v2 es de 12 keypoints, 6 por lado,
+y la segmentación no distingue lado) — pero para SAM2 conviene clickear cada pie como objeto separado
+si ambos protagonizan el clip.
 Guardar los .mp4 en `training/data_videos/`. Luego: `python 2b_sam2_video.py --video data_videos/clip01.mp4`.
 
 Las FOTOS siguen siendo necesarias para el **test set congelado** (T3.6) y para keypoints de calidad —
@@ -51,7 +53,8 @@ Objetivo: **300-500 fotos reales** diversas para (a) fine-tuning del modelo tras
 - **Resolución mínima:** 720×720 (idealmente 1080+). Cuadrada o vertical; el pipeline hace center-crop cuadrado.
 - **Cámara:** teléfono real (no captura de webcam de laptop) — queremos el ruido/compresión de móvil real.
 - **Formato:** JPG. Nombre libre; el `stem` debe ser único.
-- **Un pie por foto** por ahora (el modelo v1 asume una instancia). Fotos con dos pies: guardarlas aparte para v2.
+- Pueden aparecer **uno o ambos pies** (modelo v2: 12 keypoints, 6 por lado). Al etiquetar con
+  `2_sam_label.py`: tecla **K** = keypoints del pie derecho, **J** = del izquierdo.
 
 ## Flujo
 

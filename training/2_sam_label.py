@@ -4,16 +4,16 @@ PASO 2 — Etiquetado con SAM: máscara MULTICLASE + keypoints
 Etiqueta fotos reales en el MISMO formato que produce 0b_blender_render.py, para poder
 mezclarlas en el entrenamiento / fine-tuning y como test set congelado (ver ROADMAP T3.6).
 
-Salida:
+Salida (formato v2 por lado — el de train_model.py):
     data/masks/<stem>.png   ← PNG uint8 con índices {0 fondo, 1 pierna, 2 pie, 3 zapato}
-    data/keypoints.jsonl    ← una línea por imagen: {"file": "...jpg", "kps": [[x,y,vis]×6]}
+    data/keypoints.jsonl    ← {"file": "...jpg", "kps": {"left": [[x,y,vis]×6]|null, "right": ...}}
 
 Controles:
     1 / 2 / 3   → clase activa (pierna / pie / zapato)
     clic izq    → punto SAM positivo para la clase activa
     clic der    → punto SAM negativo para la clase activa
-    K           → modo keypoints: 6 clics en orden heel, toe, ankle_in, ankle_out, ball, toe_tip
-                  (ESPACIO salta el keypoint actual como NO visible)
+    K           → keypoints del pie DERECHO  (6 clics: heel, toe, ankle_in(medial), ankle_out,
+    J           → keypoints del pie IZQUIERDO ball, toe_tip; ESPACIO salta uno como NO visible)
     S           → guardar (máscara + keypoints) y siguiente
     R           → resetear la imagen actual
     Q           → salir
@@ -67,7 +67,9 @@ def compose_index_mask(class_masks, shape):
     return idx
 
 
-def draw_overlay(base, class_masks, points, kp_list, active_class, kp_mode, kp_index):
+KP_SIDE_COLORS = {"left": (255, 200, 0), "right": (0, 220, 255)}  # BGR: izq cian?, der amarillo — distintos
+
+def draw_overlay(base, class_masks, points, kp_sides, active_class, kp_side, kp_index):
     ov = base.copy()
     for cls, m in class_masks.items():
         if m is not None:
@@ -75,13 +77,20 @@ def draw_overlay(base, class_masks, points, kp_list, active_class, kp_mode, kp_i
     for cls, (pts, lbs) in points.items():
         for (px, py), lb in zip(pts, lbs):
             cv2.circle(ov, (px, py), 5, CLASS_COLORS[cls] if lb == 1 else (0, 0, 0), -1)
-    for i, kp in enumerate(kp_list):
-        if kp is not None:
-            cv2.circle(ov, (kp[0], kp[1]), 6, (0, 220, 255), -1)
-            cv2.putText(ov, str(i), (kp[0] + 6, kp[1] - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 255), 1)
-    status = (f"KEYPOINT {kp_index}/6: {KP_NAMES[kp_index]} (ESPACIO=no visible)"
-              if kp_mode and kp_index < 6 else
-              ("KEYPOINTS completos" if kp_mode else f"Clase activa: {active_class} {CLASS_NAMES[active_class]}"))
+    for side, kp_list in kp_sides.items():
+        col = KP_SIDE_COLORS[side]
+        for i, kp in enumerate(kp_list):
+            if kp is not None:
+                cv2.circle(ov, (kp[0], kp[1]), 6, col, -1)
+                cv2.putText(ov, f"{side[0].upper()}{i}", (kp[0] + 6, kp[1] - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1)
+    if kp_side and kp_index < 6:
+        lado = "DERECHO" if kp_side == "right" else "IZQUIERDO"
+        status = f"KEYPOINT pie {lado} {kp_index}/6: {KP_NAMES[kp_index]} (ESPACIO=no visible)"
+    elif kp_side:
+        status = f"KEYPOINTS del pie {'derecho' if kp_side == 'right' else 'izquierdo'} completos"
+    else:
+        status = f"Clase activa: {active_class} {CLASS_NAMES[active_class]}  |  K=kps der  J=kps izq"
     cv2.rectangle(ov, (0, 0), (ov.shape[1], 26), (0, 0, 0), -1)
     cv2.putText(ov, status, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
     return ov
@@ -100,9 +109,12 @@ def review_mode():
         for cls, col in CLASS_COLORS.items():
             ov[m == cls] = (0.5 * np.array(col) + 0.5 * ov[m == cls]).astype(np.uint8)
         h, w = img.shape[:2]
-        for i, kp in enumerate(kp_map.get(p.name, [])):
-            if kp[2] > 0:
-                cv2.circle(ov, (int(kp[0] * w), int(kp[1] * h)), 6, (0, 220, 255), -1)
+        raw = kp_map.get(p.name, {})
+        sides = raw if isinstance(raw, dict) else {"right": raw}  # compat v1
+        for side, block in sides.items():
+            for kp in (block or []):
+                if kp[2] > 0:
+                    cv2.circle(ov, (int(kp[0] * w), int(kp[1] * h)), 6, KP_SIDE_COLORS[side], -1)
         cv2.imshow("review", ov)
         print(f"{p.name}: clases={np.unique(m).tolist()}  (cualquier tecla=siguiente, q=salir)")
         if (cv2.waitKey(0) & 0xFF) == ord('q'):
@@ -137,9 +149,9 @@ def main():
     def reset_state():
         state["points"] = {1: ([], []), 2: ([], []), 3: ([], [])}
         state["masks"] = {1: None, 2: None, 3: None}
-        state["kp"] = [None] * 6
+        state["kp"] = {"left": [None] * 6, "right": [None] * 6}
         state["active"] = 2
-        state["kp_mode"] = False
+        state["kp_side"] = None   # None = modo máscara; "left"/"right" = modo keypoints de ese pie
         state["kp_index"] = 0
 
     def predict(cls):
@@ -152,9 +164,9 @@ def main():
         state["masks"][cls] = (masks[int(np.argmax(scores))]).astype(np.uint8)
 
     def on_mouse(event, x, y, flags, param):
-        if state["kp_mode"]:
+        if state["kp_side"]:
             if event == cv2.EVENT_LBUTTONDOWN and state["kp_index"] < 6:
-                state["kp"][state["kp_index"]] = (x, y)
+                state["kp"][state["kp_side"]][state["kp_index"]] = (x, y)
                 state["kp_index"] += 1
         else:
             cls = state["active"]
@@ -166,7 +178,7 @@ def main():
 
     def refresh():
         cv2.imshow("SAM Labeler", draw_overlay(disp_bgr, state["masks"], state["points"],
-                                               state["kp"], state["active"], state["kp_mode"], state["kp_index"]))
+                                               state["kp"], state["active"], state["kp_side"], state["kp_index"]))
 
     print(__doc__.split("Requisitos")[0])
     cv2.namedWindow("SAM Labeler", cv2.WINDOW_NORMAL)
@@ -189,11 +201,13 @@ def main():
         while True:
             key = cv2.waitKey(0) & 0xFF
             if key in (ord('1'), ord('2'), ord('3')):
-                state["active"] = key - ord('0'); state["kp_mode"] = False; refresh()
+                state["active"] = key - ord('0'); state["kp_side"] = None; refresh()
             elif key == ord('k'):
-                state["kp_mode"] = True; state["kp_index"] = 0; refresh()
-            elif key == ord(' ') and state["kp_mode"] and state["kp_index"] < 6:
-                state["kp"][state["kp_index"]] = None; state["kp_index"] += 1; refresh()
+                state["kp_side"] = "right"; state["kp_index"] = 0; refresh()
+            elif key == ord('j'):
+                state["kp_side"] = "left"; state["kp_index"] = 0; refresh()
+            elif key == ord(' ') and state["kp_side"] and state["kp_index"] < 6:
+                state["kp"][state["kp_side"]][state["kp_index"]] = None; state["kp_index"] += 1; refresh()
             elif key == ord('r'):
                 reset_state(); refresh(); print("  reseteado")
             elif key == ord('q'):
@@ -203,16 +217,17 @@ def main():
                 if scale < 1:
                     idx_mask = cv2.resize(idx_mask, (w0, h0), interpolation=cv2.INTER_NEAREST)
                 cv2.imwrite(str(mp), idx_mask)
-                kps = []
-                for kp in state["kp"]:
-                    if kp is None:
-                        kps.append([0.0, 0.0, 0.0])
-                    else:
-                        kps.append([round(kp[0] / dw, 5), round(kp[1] / dh, 5), 1.0])
-                kp_map[p.name] = kps
+                # formato v2: dict por lado; solo se emiten lados con al menos un clic
+                kps_v2 = {}
+                for side, kp_list in state["kp"].items():
+                    if any(k is not None for k in kp_list):
+                        kps_v2[side] = [[0.0, 0.0, 0.0] if kp is None
+                                        else [round(kp[0] / dw, 5), round(kp[1] / dh, 5), 1.0]
+                                        for kp in kp_list]
+                kp_map[p.name] = kps_v2
                 save_kp_map(kp_map)
-                print(f"  guardada: {mp.name}  (clases {np.unique(idx_mask).tolist()}, "
-                      f"{sum(1 for k in kps if k[2] > 0)}/6 kps)")
+                nvis = {s: sum(1 for k in b if k[2] > 0) for s, b in kps_v2.items()}
+                print(f"  guardada: {mp.name}  (clases {np.unique(idx_mask).tolist()}, kps {nvis or 'sin'})")
                 break
 
     save_kp_map(kp_map)

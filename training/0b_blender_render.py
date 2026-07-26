@@ -76,6 +76,8 @@ def parse_args():
     p.add_argument("--hdri_dir", default=None, help="carpeta con .hdr/.exr (fallback: luces aleatorias)")
     p.add_argument("--floor_dir", default=None, help="carpeta con texturas de piso (fallback: colores planos)")
     p.add_argument("--preview", action="store_true", help="=--count 20 + contact-sheet HTML")
+    p.add_argument("--foot_side", default="right", choices=["left", "right"],
+                   help="lado del GLB de pie canónico (el otro lado lo genera el flip del training)")
     return p.parse_args(argv)
 
 
@@ -542,7 +544,9 @@ def main():
     # keypoints.jsonl
     with open(out_dir / "keypoints.jsonl", "w", encoding="utf-8") as f:
         for r in records:
-            f.write(json.dumps({"file": r["file"], "kps": r["kps"]}) + "\n")
+            # formato v2 por lado: el GLB canónico es de UN lado (--foot_side);
+            # el training genera el lado contrario con flip_lr (swap de bloques)
+            f.write(json.dumps({"file": r["file"], "kps": {args.foot_side: r["kps"]}}) + "\n")
     # manifest.json
     (out_dir / "manifest.json").write_text(json.dumps({
         "seed": args.seed, "count": args.count, "size": args.size,

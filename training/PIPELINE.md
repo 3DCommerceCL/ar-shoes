@@ -1,7 +1,7 @@
 # Pipeline de entrenamiento — AR Shoe Try-On (v2)
 
 Modelo objetivo: **red multi-branch** (encoder MobileNetV2 compartido) con dos cabezas —
-(a) **keypoints** del pie (6 heatmaps) y (b) **segmentación multiclase** {fondo, pierna, pie, zapato}.
+(a) **keypoints** de AMBOS pies (12 heatmaps = 6 izq + 6 der — un solo modelo detecta ambos pies y su lado; los modos de la app ambos/izq/der son filtros de render, no modelos distintos) y (b) **segmentación multiclase** {fondo, pierna, pie, zapato}.
 Los keypoints alimentan PnP (pose 6DoF, `solver.js`); la máscara sirve para oclusión. Es la receta de
 ARShoe (arXiv 2108.10515) y Springer-2025. Ver [../ROADMAP.md](../ROADMAP.md) para el plan completo y los gates.
 
@@ -20,7 +20,8 @@ Fotos SAM (2) ┘                                                        ▲
 ```
 <data_dir>/images/<stem>.jpg|png
 <data_dir>/masks/<stem>.png        # PNG uint8 con índices {0 fondo, 1 pierna, 2 pie, 3 zapato}
-<data_dir>/keypoints.jsonl         # {"file":"<stem>.jpg","kps":[[x,y,vis]×6]}  (x,y normalizados)
+<data_dir>/keypoints.jsonl         # {"file":"x.jpg","kps":{"left":[[x,y,vis]×6]|null,"right":...}}
+                                   # (v2 por lado; ankle_in = maléolo MEDIAL, anatómico)
 ```
 Keypoints en orden: `heel, toe, ankle_in, ankle_out, ball, toe_tip`.
 Normalización fija: `mean=[0.485,0.456,0.406] std=[0.229,0.224,0.225]` (la misma que usa `inference.js`).

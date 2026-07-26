@@ -6,7 +6,7 @@ import * as ort from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/o
 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/';
 ort.env.wasm.numThreads = 1; // GitHub Pages no envía COOP/COEP → sin SharedArrayBuffer/threads
 
-const INPUT = 256, HM = 64, NUM_CLASSES = 4, NUM_KP = 6;
+const INPUT = 256, HM = 64, NUM_CLASSES = 4;
 const DEFAULT_MEAN = [0.485, 0.456, 0.406];
 const DEFAULT_STD  = [0.229, 0.224, 0.225];
 
@@ -73,11 +73,12 @@ function segArgmax(seg) {
   return out;
 }
 
-// argmax + refino por centro de masa 3×3 de cada heatmap → [[x,y,conf]×6] en coords del FRAME completo
-function kpsFromHeatmaps(hm, crop) {
+// argmax + refino por centro de masa 3×3 de cada heatmap → [[x,y,conf]×N] en coords del FRAME completo
+// N se deriva del tensor (6 = un pie legacy; 12 = 6×left + 6×right, ver meta.keypoints)
+function kpsFromHeatmaps(hm, crop, numKp) {
   const plane = HM * HM;
   const kps = [];
-  for (let k = 0; k < NUM_KP; k++) {
+  for (let k = 0; k < numKp; k++) {
     const base = k * plane;
     let bi = 0, bv = -Infinity;
     for (let i = 0; i < plane; i++) { const v = hm[base + i]; if (v > bv) { bv = v; bi = i; } }
@@ -106,7 +107,11 @@ export async function runInference(src) {
   const t0 = performance.now();
   const out = await session.run({ [session.inputNames[0]]: tensor });
   const latencyMs = performance.now() - t0;
-  const seg = (out.seg || out[session.outputNames[0]]).data;
-  const hm  = (out.heatmaps || out[session.outputNames[1]]).data;
-  return { seg: segArgmax(seg), kps: kpsFromHeatmaps(hm, crop), latencyMs, ep: activeEP, crop };
+  const seg  = (out.seg || out[session.outputNames[0]]).data;
+  const hmT  = out.heatmaps || out[session.outputNames[1]];
+  const numKp = hmT.dims ? hmT.dims[1] : 12;          // N de heatmaps del propio tensor
+  const kps = kpsFromHeatmaps(hmT.data, crop, numKp);
+  // con 12 canales, separar por lado: [left×6, right×6] (orden fijado en train_model.py)
+  const byFoot = numKp === 12 ? { left: kps.slice(0, 6), right: kps.slice(6, 12) } : null;
+  return { seg: segArgmax(seg), kps, byFoot, numKp, latencyMs, ep: activeEP, crop };
 }
