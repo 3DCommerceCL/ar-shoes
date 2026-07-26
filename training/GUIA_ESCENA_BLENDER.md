@@ -46,9 +46,32 @@ frontera pierna/zapato. Hay que incluir **3 variantes**, y el script activa UNA 
 
 | Nombre EXACTO del objeto | Qué es |
 |---|---|
-| `leg_bare` | La pierna con piel desde el tobillo hasta ~15 cm+ arriba (media pantorrilla) |
+| `leg_bare` | La pierna con piel desde el tobillo hacia arriba |
 | `leg_pants_dark` | Un bajo de pantalón oscuro cayendo sobre el tobillo (tubo de tela alcanza) |
 | `leg_pants_light` | Ídem en tela clara (jean claro / beige) |
+
+#### ¿Hasta dónde llega la pierna: media pantorrilla o la rodilla?
+
+**Recomendado: ~30 cm sobre el tobillo (media pantorrilla / debajo de la rodilla).** No hace falta
+llegar a la rodilla y tampoco conviene quedarse corto:
+
+- **Muy corta (< 15 cm):** el "tubo" se ve entero dentro del cuadro con su tapa superior flotando —
+  el modelo aprende un objeto que no existe en la realidad (en una foto real la pierna siempre
+  sale del cuadro o llega hasta la ropa).
+- **~30 cm (recomendado):** en casi todos los ángulos la pierna **sale del cuadro** por arriba,
+  que es exactamente lo que pasa en una foto real. Es el rango que mejor transfiere.
+- **Hasta la rodilla (45 cm+):** no aporta más (la parte de arriba casi nunca entra en cuadro) y
+  obliga a la cámara a alejarse, achicando el pie en el encuadre. No está mal, pero no suma.
+
+> **Nota técnica (ya resuelta en el script):** el script calcula la distancia de cámara con el
+> tamaño del *pie*, así que con una pierna larga la cámara cenital quedaba **por debajo del tope
+> de la pierna** y el render salía arruinado. Se corrigió: ahora la cámara nunca entra en la
+> esfera que contiene toda la escena (pierna incluida) y el near-clip bajó a 1 cm. Con cualquier
+> largo razonable funciona — pero 30 cm sigue siendo el mejor encuadre.
+
+**Que la pierna sea cónica** (más fina en el tobillo, más ancha arriba: ~7 cm de diámetro en el
+tobillo, ~11 cm arriba). Un cilindro recto y grueso desde el tobillo tapa el pie en las tomas
+desde atrás. Y **cerrá la tapa de arriba** (que no sea un tubo hueco).
 
 **⚠️ Importante — por NOMBRE DE OBJETO, no por colección:** el formato GLB no conserva las
 colecciones de Blender. El script detecta las variantes por el **nombre del objeto** (prefijo
@@ -75,8 +98,32 @@ box y pierde precisión):
 | `kp_toe_tip` | Punta del dedo gordo |
 
 `ankle_in` = medial es **anatómico** (no "izquierda de la pantalla") — es lo que hace válido el
-espejado para generar el pie izquierdo. Podés parentar los Empties al mesh del pie para que no
-se pierdan (`Ctrl+P → Object`).
+espejado para generar el pie izquierdo.
+
+**Los keypoints se marcan aunque el zapato los tape.** Casi todos (talón, bola, punta) quedan
+*dentro* del zapato: es correcto y buscado — el modelo tiene que aprender a inferir dónde está el
+pie **debajo** del zapato, que es de donde sale la pose para calzarle el zapato virtual. Poné cada
+Empty en su posición anatómica real, sin importar que el calzado lo cubra.
+
+#### ¿Qué es "parentar" los Empties al mesh del pie?
+
+**Parentar** = emparentar: hacer que un objeto sea "hijo" de otro, de modo que cuando el padre se
+mueve, rota o escala, **los hijos lo siguen automáticamente** manteniendo su posición relativa.
+Es el equivalente 3D de pegar una etiqueta a una caja: movés la caja y la etiqueta va con ella.
+
+Acá sirve para que los 6 Empties queden **pegados al pie**: si después movés o rotás el pie
+(o el script lo rota en cada render), los keypoints acompañan y siguen marcando el talón, la
+punta, etc. Si NO los parentás, quedan sueltos en el espacio y al rotar el pie los keypoints
+apuntan al vacío.
+
+**Cómo se hace (10 segundos):**
+1. Seleccioná los 6 Empties (clic en el primero, `Shift` + clic en los otros 5).
+2. **Último**, con `Shift` + clic, seleccioná el **mesh del pie** — el padre es siempre el que se
+   selecciona al final (queda con borde más claro).
+3. `Ctrl+P` → elegí **Object (Keep Transform)**.
+
+Para comprobarlo: en el Outliner los Empties ahora aparecen anidados debajo del pie, y si rotás
+el pie con `R` los Empties giran con él. El script respeta ese parenteo al importar el GLB.
 
 ### Export
 `File → Export → glTF 2.0 (.glb)`: formato **glb**, con **+Y up** (default del exporter),

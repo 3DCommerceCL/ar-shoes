@@ -121,7 +121,12 @@ def find_or_make_keypoints(foot_objs, parent):
     if have_named:
         for n in KP_NAMES:
             e = existing[f"kp_{n}"]
-            e.parent = parent
+            # Si el Empty YA viene parentado (p.ej. al mesh del pie, como recomienda la guía),
+            # NO reparentar: cambiar el padre sin corregir matrix_parent_inverse lo desplazaría.
+            # Su cadena de padres termina igual en Root, así que rota con el conjunto.
+            if e.parent is None:
+                e.parent = parent
+                e.matrix_parent_inverse = parent.matrix_world.inverted()
             kp_objs.append(e)
         print("  [kp] usando Empties kp_* del GLB")
         return kp_objs
@@ -162,20 +167,18 @@ def find_or_make_keypoints(foot_objs, parent):
 
 
 def project_keypoints(scene, cam, kp_objs):
-    deps = bpy.context.evaluated_depsgraph_get()
-    cam_o = cam.matrix_world.translation
+    """Keypoints AMODALES: se etiquetan siempre que caigan DENTRO del frame, aunque el zapato
+    (o el pantalón) los tape. Es intencional: el modelo debe inferir dónde está el pie DEBAJO del
+    zapato — de ahí sale la pose 6DoF para calzarle el zapato virtual.
+    (Antes había un ray_cast que ponía vis=0 al ocluirse: con el pie calzado anulaba casi todos
+    los keypoints y le enseñaba al modelo a no predecir nada cuando ve un zapato. Bug corregido.)
+    vis=0 sólo si el punto queda fuera de cuadro o detrás de la cámara."""
     kps = []
     for e in kp_objs:
         P = e.matrix_world.translation
         co = world_to_camera_view(scene, cam, P)   # x,y en [0,1] (0,0 abajo-izq), z profundidad
         x_img, y_img = co.x, 1.0 - co.y
         vis = 1.0 if (co.z > 0 and 0.0 <= co.x <= 1.0 and 0.0 <= co.y <= 1.0) else 0.0
-        if vis > 0:  # test de oclusión (epsilon proporcional: puntos en superficie no se auto-ocluyen)
-            d = (P - cam_o)
-            dist = d.length
-            hit, loc, *_ = scene.ray_cast(deps, cam_o, d.normalized())
-            if hit and (loc - cam_o).length < dist * 0.98:
-                vis = 0.0
         kps.append([round(float(x_img), 5), round(float(y_img), 5), float(vis)])
     return kps
 
@@ -254,12 +257,19 @@ def make_floor(floor_paths, rng):
 # =====================================================================
 # CÁMARA
 # =====================================================================
-def place_camera(radius, rng):
+def place_camera(radius, rng, scene_radius=None):
+    """radius: radio del SUJETO (pie+zapato) → define el encuadre.
+    scene_radius: radio de TODO (incl. pierna) → piso mínimo de distancia para que la cámara
+    nunca quede por debajo del tope de la pierna (si no, en cenital la pierna pasa al lado de
+    la cámara y arruina el render). Verificado: pie radio 0.2 → cenital 0.26m, pero una pierna
+    a la rodilla llega a 0.52m."""
     cfg = rng.choices(CAMERA_CONFIGS, weights=[c[1] for c in CAMERA_CONFIGS])[0]
     name, _, elev_r, azim_r, dmin, dmax = cfg
     elev = math.radians(rng.uniform(*elev_r))
     azim = math.radians(rng.uniform(*azim_r))
     dist = radius * rng.uniform(dmin, dmax)
+    if scene_radius:
+        dist = max(dist, scene_radius * 1.25)   # siempre fuera del bounding sphere de la escena
     loc = Vector((dist * math.cos(elev) * math.sin(azim),
                   dist * math.cos(elev) * math.cos(azim),
                   dist * math.sin(elev)))
@@ -270,6 +280,7 @@ def place_camera(radius, rng):
     cam.location = loc
     cam.rotation_euler = (Vector((0, 0, radius * 0.2)) - loc).to_track_quat('-Z', 'Y').to_euler()
     cam.data.lens = rng.uniform(18, 35)
+    cam.data.clip_start = 0.01                  # evita recortes en primeros planos
     bpy.context.scene.camera = cam
     return name
 
@@ -372,8 +383,9 @@ def render_one(idx, scene, foot_objs, shoe_variants, leg_objs, root, kp_objs,
     root.rotation_euler = Euler((0, 0, rng.uniform(0, 2 * math.pi)))
     bpy.context.view_layer.update()
 
-    radius = mesh_world_radius(foot_objs + active_shoe)
-    angle_name = place_camera(radius, rng)
+    radius = mesh_world_radius(foot_objs + active_shoe)              # encuadre: sujeto
+    scene_radius = mesh_world_radius(foot_objs + active_shoe + list(active_leg))  # + pierna
+    angle_name = place_camera(radius, rng, scene_radius)
 
     # --- COLOR ---
     if hdri_paths:
