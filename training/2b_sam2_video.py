@@ -61,8 +61,14 @@ MAX_DISP = 960
 # ---------------------------------------------------------------------
 # extracción de frames (SAM2 init_state espera un dir de JPEGs numerados)
 # ---------------------------------------------------------------------
-def extract_frames(video_path, tmp_dir, max_side=1024, extract_stride=1):
-    """Extrae 1 de cada extract_stride frames del video, renumerados consecutivos (SAM2 los exige así)."""
+def extract_frames(video_path, tmp_dir, max_side=1024, extract_stride=1, square=True):
+    """Extrae 1 de cada extract_stride frames, renumerados consecutivos (SAM2 los exige así).
+
+    square=True hace RECORTE CUADRADO CENTRADO, igual que inference.js en la app: así el modelo
+    entrena viendo exactamente el mismo encuadre que verá en producción (y coincide además con
+    los renders sintéticos, que son cuadrados). Sin esto, un video vertical se aplastaba a
+    cuadrado en el entrenamiento mientras la app recorta → distorsión distinta = peor precisión.
+    IMPORTANTE: hay que grabar con los pies CENTRADOS, o el recorte se los come."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise SystemExit(f"No pude abrir el video: {video_path}")
@@ -72,10 +78,14 @@ def extract_frames(video_path, tmp_dir, max_side=1024, extract_stride=1):
         if not ok:
             break
         if src % extract_stride == 0:
+            if square:
+                h, w = frame.shape[:2]
+                s = min(h, w)
+                frame = frame[(h - s) // 2:(h - s) // 2 + s, (w - s) // 2:(w - s) // 2 + s]
             h, w = frame.shape[:2]
             if max(h, w) > max_side:
-                s = max_side / max(h, w)
-                frame = cv2.resize(frame, (int(w * s), int(h * s)))
+                sc = max_side / max(h, w)
+                frame = cv2.resize(frame, (int(w * sc), int(h * sc)))
             cv2.imwrite(str(tmp_dir / f"{n:05d}.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
             n += 1
         src += 1
@@ -211,6 +221,8 @@ def main():
     ap.add_argument("--extract_stride", type=int, default=1,
                     help="procesar 1 de cada N frames del video (subí a 3 en CPU)")
     ap.add_argument("--max_side", type=int, default=1024, help="lado máximo de frame (bajá a 640 en CPU)")
+    ap.add_argument("--no_crop", action="store_true",
+                    help="NO recortar cuadrado (sólo si los pies quedaron fuera del centro del cuadro)")
     ap.add_argument("--checkpoint", default="checkpoints/sam2.1_hiera_tiny.pt")
     ap.add_argument("--config", default="configs/sam2.1/sam2.1_hiera_t.yaml",
                     help="config del checkpoint (t/s/b+/l deben coincidir)")
@@ -243,8 +255,10 @@ def main():
 
     tmp = Path(tempfile.mkdtemp(prefix="sam2_frames_"))
     try:
-        n = extract_frames(video, tmp, max_side=args.max_side, extract_stride=args.extract_stride)
-        print(f"{n} frames extraídos de {video.name} (extract_stride {args.extract_stride}, max {args.max_side}px)")
+        n = extract_frames(video, tmp, max_side=args.max_side, extract_stride=args.extract_stride,
+                           square=not args.no_crop)
+        print(f"{n} frames extraídos de {video.name} (extract_stride {args.extract_stride}, "
+              f"max {args.max_side}px, {'recorte cuadrado centrado' if not args.no_crop else 'SIN recorte'})")
         first = cv2.imread(str(tmp / "00000.jpg"))
         clicks = collect_clicks(first)
         print(f"Propagando clases {sorted(clicks.keys())} con SAM2 ({n} frames)…")
