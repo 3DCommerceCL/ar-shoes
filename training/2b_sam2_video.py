@@ -118,8 +118,12 @@ def extract_frames(video_path, tmp_dir, max_side=1024, extract_stride=1, square=
 def parse_points(spec, w, h):
     """'3.1:0.4,0.58 3.2:0.6,0.55 -3.2:0.1,0.1' → {obj_id: (puntos_px, labels)}.
 
-    Formato: 'clase[.instancia]:x,y', con x,y en fracción [0,1] del frame ya extraído y
+    Formato: 'clase[.instancia][@frame]:x,y', con x,y en fracción [0,1] del frame ya extraído y
     '-' delante para punto NEGATIVO. obj_id = clase*100 + instancia.
+
+    '@frame' agrega el punto en ESE frame (por defecto el 0). Sirve para corregir la propagación
+    donde se desvía, o para marcar partes que en el frame 0 están tapadas y se descubren después
+    (p. ej. el cuello de la bota que el jean tapa al principio). Es el flujo previsto por SAM2.
 
     IMPORTANTE — usar una INSTANCIA POR OBJETO FÍSICO: dos puntos positivos sobre dos objetos
     separados (p. ej. los dos zapatos) hacen que SAM2 devuelva UNA sola máscara que los engloba,
@@ -131,16 +135,18 @@ def parse_points(spec, w, h):
         head, coords = tok.split(":")
         neg = head.startswith("-")
         head = head.lstrip("-")
+        head, _, frame_s = head.partition("@")          # clase[.inst][@frame]
+        frame = int(frame_s) if frame_s else 0
         cls_s, _, inst_s = head.partition(".")
         cls = int(cls_s)
         inst = int(inst_s) if inst_s else 0
         if cls not in (1, 2, 3):
             raise SystemExit(f"Clase inválida en --points: {tok} (usar 1=pierna, 2=pie, 3=zapato)")
         fx, fy = (float(v) for v in coords.split(","))
-        pts, lbs = per_obj.setdefault(cls * 100 + inst, ([], []))
+        pts, lbs = per_obj.setdefault((cls * 100 + inst, frame), ([], []))
         pts.append([fx * w, fy * h])
         lbs.append(0 if neg else 1)
-    return {o: (np.array(p, np.float32), np.array(l, np.int32)) for o, (p, l) in per_obj.items()}
+    return {k: (np.array(p, np.float32), np.array(l, np.int32)) for k, (p, l) in per_obj.items()}
 
 
 def collect_clicks(first_frame):
@@ -201,7 +207,7 @@ def collect_clicks(first_frame):
             out = {}
             for obj_id, (pts, lbs) in state["objs"].items():
                 if pts:
-                    out[obj_id] = (np.array(pts, np.float32) / scale, np.array(lbs, np.int32))
+                    out[(obj_id, 0)] = (np.array(pts, np.float32) / scale, np.array(lbs, np.int32))
             if not out:
                 raise SystemExit("Sin clics — nada que propagar")
             return out
@@ -220,8 +226,9 @@ def propagate(frames_dir, clicks, checkpoint, config, device):
     predictor = build_sam2_video_predictor(config, checkpoint, device=device)
     state = predictor.init_state(video_path=str(frames_dir))
 
-    for obj_id, (pts, lbs) in clicks.items():
-        predictor.add_new_points_or_box(inference_state=state, frame_idx=0,
+    for key, (pts, lbs) in clicks.items():
+        obj_id, frame_idx = key if isinstance(key, tuple) else (key, 0)
+        predictor.add_new_points_or_box(inference_state=state, frame_idx=frame_idx,
                                         obj_id=obj_id, points=pts, labels=lbs)
 
     per_frame = {}
@@ -331,7 +338,8 @@ def main():
             fh, fw = first.shape[:2]
             clicks = parse_points(args.points, fw, fh)
             print(f"  [pts] modo no interactivo: " +
-                  ", ".join(f"clase {c}: {len(p[0])} pts" for c, p in sorted(clicks.items())))
+                  ", ".join(f"obj {k[0]//100}.{k[0]%100}@f{k[1]}: {len(p[0])} pts"
+                            for k, p in sorted(clicks.items())))
         else:
             clicks = collect_clicks(first)
         print(f"Propagando clases {sorted(clicks.keys())} con SAM2 ({n} frames)…")
