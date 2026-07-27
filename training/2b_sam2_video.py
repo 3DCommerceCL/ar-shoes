@@ -116,24 +116,38 @@ def extract_frames(video_path, tmp_dir, max_side=1024, extract_stride=1, square=
 # UI de clics sobre el primer frame
 # ---------------------------------------------------------------------
 def parse_points(spec, w, h):
-    """'2:0.5,0.45 3:0.45,0.6 -3:0.1,0.1' → {clase: (puntos_px, labels)}.
-    Coordenadas en fracción [0,1] del frame ya extraído; '-' delante de la clase = punto negativo."""
-    per_cls = {}
+    """'3.1:0.4,0.58 3.2:0.6,0.55 -3.2:0.1,0.1' → {obj_id: (puntos_px, labels)}.
+
+    Formato: 'clase[.instancia]:x,y', con x,y en fracción [0,1] del frame ya extraído y
+    '-' delante para punto NEGATIVO. obj_id = clase*100 + instancia.
+
+    IMPORTANTE — usar una INSTANCIA POR OBJETO FÍSICO: dos puntos positivos sobre dos objetos
+    separados (p. ej. los dos zapatos) hacen que SAM2 devuelva UNA sola máscara que los engloba,
+    y termina agarrando el piso que hay entre medio. Verificado en clip02. Con instancias
+    separadas cada zapato se sigue por su cuenta y después se funden en la misma clase.
+    """
+    per_obj = {}
     for tok in spec.split():
         head, coords = tok.split(":")
         neg = head.startswith("-")
-        cls = int(head.lstrip("-"))
+        head = head.lstrip("-")
+        cls_s, _, inst_s = head.partition(".")
+        cls = int(cls_s)
+        inst = int(inst_s) if inst_s else 0
         if cls not in (1, 2, 3):
             raise SystemExit(f"Clase inválida en --points: {tok} (usar 1=pierna, 2=pie, 3=zapato)")
         fx, fy = (float(v) for v in coords.split(","))
-        pts, lbs = per_cls.setdefault(cls, ([], []))
+        pts, lbs = per_obj.setdefault(cls * 100 + inst, ([], []))
         pts.append([fx * w, fy * h])
         lbs.append(0 if neg else 1)
-    return {c: (np.array(p, np.float32), np.array(l, np.int32)) for c, (p, l) in per_cls.items()}
+    return {o: (np.array(p, np.float32), np.array(l, np.int32)) for o, (p, l) in per_obj.items()}
 
 
 def collect_clicks(first_frame):
-    state = {"active": 2, "points": {1: ([], []), 2: ([], []), 3: ([], [])}, "done": False}
+    """Cada clic IZQUIERDO abre un objeto nuevo de la clase activa (dos zapatos = dos objetos);
+    los clics DERECHOS agregan puntos negativos al último objeto abierto, para corregirlo.
+    (Agrupar dos objetos separados bajo una sola máscara hace que SAM2 agarre el piso entre medio.)"""
+    state = {"active": 2, "objs": {}, "count": {1: 0, 2: 0, 3: 0}, "last": None}
     disp = first_frame.copy()
     h, w = disp.shape[:2]
     scale = min(1.0, MAX_DISP / max(h, w))
@@ -142,20 +156,31 @@ def collect_clicks(first_frame):
 
     def refresh():
         ov = disp.copy()
-        for cls, (pts, lbs) in state["points"].items():
+        for obj_id, (pts, lbs) in state["objs"].items():
+            cls = obj_id // 100
             for (px, py), lb in zip(pts, lbs):
                 cv2.circle(ov, (px, py), 6, CLASS_COLORS[cls] if lb == 1 else (0, 0, 0), -1)
+                if lb == 1:
+                    cv2.putText(ov, f"{cls}.{obj_id % 100}", (px + 8, py - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, CLASS_COLORS[cls], 1)
         cv2.rectangle(ov, (0, 0), (ov.shape[1], 26), (0, 0, 0), -1)
         cv2.putText(ov, f"Clase activa: {state['active']} {CLASS_NAMES[state['active']]}  "
-                        f"(1/2/3 cambia, ENTER propaga, R resetea, Q sale)",
-                    (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                        f"| izq=objeto nuevo  der=corrige el ultimo  (1/2/3, ENTER, R, Q)",
+                    (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         cv2.imshow("SAM2 - primer frame", ov)
 
     def on_mouse(event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
-            state["points"][state["active"]][0].append([x, y]); state["points"][state["active"]][1].append(1)
+            cls = state["active"]
+            state["count"][cls] += 1
+            obj_id = cls * 100 + state["count"][cls]
+            state["objs"][obj_id] = ([[x, y]], [1])
+            state["last"] = obj_id
         elif event == cv2.EVENT_RBUTTONDOWN:
-            state["points"][state["active"]][0].append([x, y]); state["points"][state["active"]][1].append(0)
+            if state["last"] is None:
+                return
+            pts, lbs = state["objs"][state["last"]]
+            pts.append([x, y]); lbs.append(0)
         else:
             return
         refresh()
@@ -168,16 +193,15 @@ def collect_clicks(first_frame):
         if k in (ord('1'), ord('2'), ord('3')):
             state["active"] = k - ord('0'); refresh()
         elif k == ord('r'):
-            for c in state["points"]:
-                state["points"][c] = ([], [])
+            state["objs"] = {}; state["count"] = {1: 0, 2: 0, 3: 0}; state["last"] = None
             refresh()
         elif k in (13, 10):   # ENTER
             cv2.destroyAllWindows()
             # devolver en coords del frame ORIGINAL (deshacer el scale de display)
             out = {}
-            for cls, (pts, lbs) in state["points"].items():
+            for obj_id, (pts, lbs) in state["objs"].items():
                 if pts:
-                    out[cls] = (np.array(pts, np.float32) / scale, np.array(lbs, np.int32))
+                    out[obj_id] = (np.array(pts, np.float32) / scale, np.array(lbs, np.int32))
             if not out:
                 raise SystemExit("Sin clics — nada que propagar")
             return out
@@ -196,9 +220,9 @@ def propagate(frames_dir, clicks, checkpoint, config, device):
     predictor = build_sam2_video_predictor(config, checkpoint, device=device)
     state = predictor.init_state(video_path=str(frames_dir))
 
-    for cls, (pts, lbs) in clicks.items():
+    for obj_id, (pts, lbs) in clicks.items():
         predictor.add_new_points_or_box(inference_state=state, frame_idx=0,
-                                        obj_id=cls, points=pts, labels=lbs)
+                                        obj_id=obj_id, points=pts, labels=lbs)
 
     per_frame = {}
     with torch.inference_mode():
@@ -211,10 +235,13 @@ def propagate(frames_dir, clicks, checkpoint, config, device):
 
 
 def compose_index_mask(masks, shape):
+    """masks: {obj_id: máscara}. Todas las instancias de una clase se funden en el mismo índice.
+    Prioridad de pintado: pierna < pie < zapato (el zapato tapa al pie que tapa a la pierna)."""
     idx = np.zeros(shape, np.uint8)
-    for cls in (1, 2, 3):  # prioridad: zapato pisa a pie pisa a pierna
-        if cls in masks:
-            m = masks[cls]
+    for cls in (1, 2, 3):
+        for obj_id, m in masks.items():
+            if (obj_id // 100 if obj_id >= 100 else obj_id) != cls:
+                continue
             if m.shape != shape:
                 m = cv2.resize(m, (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST)
             idx[m > 0] = cls
