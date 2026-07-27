@@ -173,7 +173,13 @@ class FootDataset:
         mask_t = torch.from_numpy(np.clip(mask, 0, NUM_CLASSES - 1).astype(np.int64))
         hm_t   = torch.from_numpy(heatmaps)
         kp_t   = torch.from_numpy(kps_norm)
-        return img_t, mask_t, hm_t, kp_t
+        # has_kp: ¿esta muestra trae ANOTACIÓN de keypoints? Los frames de video (SAM2) traen
+        # sólo máscaras → deben quedar FUERA de la pérdida de keypoints; si no, sus heatmaps
+        # vacíos le enseñarían al modelo a no predecir keypoints nunca.
+        # OJO: distinto de "ese pie no está en la imagen" — ahí el heatmap vacío SÍ es correcto
+        # (así el modelo aprende qué pies están presentes) y la muestra sí participa.
+        has_kp = torch.tensor(1.0 if s.get("kps") else 0.0, dtype=torch.float32)
+        return img_t, mask_t, hm_t, kp_t, has_kp
 
 
 def _build_augmenter(img_size):
@@ -300,11 +306,18 @@ def dice_loss_multiclass(logits, target, eps=1e-6):
     return 1 - dice.mean()
 
 
-def combined_loss(seg_logits, kp_pred, mask, hm, w_kp=10.0):
+def combined_loss(seg_logits, kp_pred, mask, hm, has_kp=None, w_kp=10.0):
+    """has_kp: (B,) 1.0 si la muestra trae anotación de keypoints, 0.0 si es sólo-segmentación
+    (frames de video de SAM2). Las muestras sin anotación NO aportan a la pérdida de keypoints."""
     import torch.nn.functional as F
     ce   = F.cross_entropy(seg_logits, mask)
     dice = dice_loss_multiclass(seg_logits, mask)
-    mse  = F.mse_loss(kp_pred, hm)
+    if has_kp is None:
+        mse = F.mse_loss(kp_pred, hm)
+    else:
+        per_sample = ((kp_pred - hm) ** 2).mean(dim=(1, 2, 3))       # (B,)
+        w = has_kp.to(per_sample.dtype)
+        mse = (per_sample * w).sum() / w.sum().clamp(min=1e-6)
     return ce + dice + w_kp * mse, {"ce": ce.item(), "dice": dice.item(), "mse": mse.item()}
 
 
@@ -411,7 +424,7 @@ def make_dummy_samples(n=20, seed=0):
     """Muestras sintéticas en memoria para el smoke test (imagen ruido + rect pie/zapato + kps)."""
     rng = np.random.default_rng(seed)
     out = []
-    for _ in range(n):
+    for _i in range(n):
         img = (rng.random((IMG_SIZE, IMG_SIZE, 3)) * 255).astype(np.uint8)
         mask = np.zeros((IMG_SIZE, IMG_SIZE), np.uint8)
         x0, y0 = rng.integers(20, 120), rng.integers(20, 120)
@@ -420,12 +433,14 @@ def make_dummy_samples(n=20, seed=0):
         mask[y0 + h // 2:y0 + h, x0:x0 + w] = 3                       # zapato (mitad inferior)
         mask[max(0, y0 - 30):y0, x0:x0 + w] = 1                       # pierna
         block = []
-        for _i in range(KP_PER_FOOT):
+        for _k in range(KP_PER_FOOT):
             kx = (x0 + rng.integers(0, w)) / IMG_SIZE
             ky = (y0 + rng.integers(0, h)) / IMG_SIZE
             block.append([float(kx), float(ky), 1.0])
         side = SIDES[int(rng.integers(0, 2))]   # un pie por muestra, lado aleatorio (v2)
-        out.append({"img": img, "mask": mask, "kps": {side: block}})
+        # 1 de cada 3 muestras sin keypoints: simula los frames de video de SAM2 (sólo-segmentación)
+        kps = None if (_i % 3 == 2) else {side: block}
+        out.append({"img": img, "mask": mask, "kps": kps})
     return out
 
 
@@ -468,10 +483,10 @@ def run(args):
     for epoch in range(1, args.epochs + 1):
         model.train()
         tl = 0.0
-        for img, mask, hm, _kp in train_ld:
-            img, mask, hm = img.to(device), mask.to(device), hm.to(device)
+        for img, mask, hm, _kp, has_kp in train_ld:
+            img, mask, hm, has_kp = img.to(device), mask.to(device), hm.to(device), has_kp.to(device)
             seg, kp = model(img)
-            loss, _ = combined_loss(seg, kp, mask, hm, w_kp=args.w_kp)
+            loss, _ = combined_loss(seg, kp, mask, hm, has_kp=has_kp, w_kp=args.w_kp)
             opt.zero_grad(); loss.backward(); opt.step()
             tl += loss.item()
         sched.step()
@@ -481,12 +496,15 @@ def run(args):
         stats = {"inter": [0] * NUM_CLASSES, "union": [0] * NUM_CLASSES, "fs_inter": 0, "fs_union": 0}
         pck_c = pck_t = 0
         with torch.no_grad():
-            for img, mask, hm, kp_gt in val_ld:
-                img, mask, hm, kp_gt = img.to(device), mask.to(device), hm.to(device), kp_gt.to(device)
+            for img, mask, hm, kp_gt, has_kp in val_ld:
+                img, mask, kp_gt = img.to(device), mask.to(device), kp_gt.to(device)
                 seg, kp = model(img)
                 update_iou_stats(stats, seg, mask)
-                c, t = pck_batch(kp, kp_gt)
-                pck_c += c; pck_t += t
+                # PCK sólo sobre muestras CON anotación de keypoints (los frames de video no la traen)
+                sel = has_kp.to(kp_gt.device) > 0
+                if sel.any():
+                    c, t = pck_batch(kp[sel], kp_gt[sel])
+                    pck_c += c; pck_t += t
 
         ious = [(stats["inter"][c] / stats["union"][c]) if stats["union"][c] > 0 else float("nan")
                 for c in range(NUM_CLASSES)]

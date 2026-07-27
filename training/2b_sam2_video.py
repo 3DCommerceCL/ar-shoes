@@ -61,7 +61,8 @@ MAX_DISP = 960
 # ---------------------------------------------------------------------
 # extracción de frames (SAM2 init_state espera un dir de JPEGs numerados)
 # ---------------------------------------------------------------------
-def extract_frames(video_path, tmp_dir, max_side=1024, extract_stride=1, square=True):
+def extract_frames(video_path, tmp_dir, max_side=1024, extract_stride=1, square=True,
+                   force_rotate=None):
     """Extrae 1 de cada extract_stride frames, renumerados consecutivos (SAM2 los exige así).
 
     square=True hace RECORTE CUADRADO CENTRADO, igual que inference.js en la app: así el modelo
@@ -72,11 +73,27 @@ def extract_frames(video_path, tmp_dir, max_side=1024, extract_stride=1, square=
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise SystemExit(f"No pude abrir el video: {video_path}")
+
+    # Rotación: los teléfonos guardan el video en el sensor y anotan un flag de rotación en el
+    # contenedor. Los reproductores lo respetan; OpenCV entrega el frame CRUDO (se ve "al revés"
+    # o de costado). Leemos el flag y rotamos nosotros; --rotate lo fuerza a mano.
+    meta_rot = 0
+    try:
+        meta_rot = int(cap.get(cv2.CAP_PROP_ORIENTATION_META) or 0) % 360
+    except Exception:
+        meta_rot = 0
+    rot = meta_rot if force_rotate is None else int(force_rotate) % 360
+    ROT_OPS = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+    if rot:
+        print(f"  [rot] rotación {rot}° ({'metadato del video' if force_rotate is None else 'forzada'})")
+
     n = src = 0
     while True:
         ok, frame = cap.read()
         if not ok:
             break
+        if rot in ROT_OPS:
+            frame = cv2.rotate(frame, ROT_OPS[rot])
         if src % extract_stride == 0:
             if square:
                 h, w = frame.shape[:2]
@@ -98,6 +115,23 @@ def extract_frames(video_path, tmp_dir, max_side=1024, extract_stride=1, square=
 # ---------------------------------------------------------------------
 # UI de clics sobre el primer frame
 # ---------------------------------------------------------------------
+def parse_points(spec, w, h):
+    """'2:0.5,0.45 3:0.45,0.6 -3:0.1,0.1' → {clase: (puntos_px, labels)}.
+    Coordenadas en fracción [0,1] del frame ya extraído; '-' delante de la clase = punto negativo."""
+    per_cls = {}
+    for tok in spec.split():
+        head, coords = tok.split(":")
+        neg = head.startswith("-")
+        cls = int(head.lstrip("-"))
+        if cls not in (1, 2, 3):
+            raise SystemExit(f"Clase inválida en --points: {tok} (usar 1=pierna, 2=pie, 3=zapato)")
+        fx, fy = (float(v) for v in coords.split(","))
+        pts, lbs = per_cls.setdefault(cls, ([], []))
+        pts.append([fx * w, fy * h])
+        lbs.append(0 if neg else 1)
+    return {c: (np.array(p, np.float32), np.array(l, np.int32)) for c, (p, l) in per_cls.items()}
+
+
 def collect_clicks(first_frame):
     state = {"active": 2, "points": {1: ([], []), 2: ([], []), 3: ([], [])}, "done": False}
     disp = first_frame.copy()
@@ -223,6 +257,12 @@ def main():
     ap.add_argument("--max_side", type=int, default=1024, help="lado máximo de frame (bajá a 640 en CPU)")
     ap.add_argument("--no_crop", action="store_true",
                     help="NO recortar cuadrado (sólo si los pies quedaron fuera del centro del cuadro)")
+    ap.add_argument("--rotate", type=int, default=None, choices=[0, 90, 180, 270],
+                    help="forzar rotación en grados (por defecto: la que indique el metadato del video)")
+    ap.add_argument("--points", default=None,
+                    help="modo NO interactivo: puntos como 'clase:x,y' separados por espacio, con "
+                         "x,y en fracción 0-1 del frame ya recortado. Negativo: anteponer '-'. "
+                         "Ej: '2:0.5,0.45 3:0.45,0.6 3:0.6,0.6 1:0.5,0.9 -3:0.1,0.1'")
     ap.add_argument("--checkpoint", default="checkpoints/sam2.1_hiera_tiny.pt")
     ap.add_argument("--config", default="configs/sam2.1/sam2.1_hiera_t.yaml",
                     help="config del checkpoint (t/s/b+/l deben coincidir)")
@@ -256,11 +296,17 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="sam2_frames_"))
     try:
         n = extract_frames(video, tmp, max_side=args.max_side, extract_stride=args.extract_stride,
-                           square=not args.no_crop)
+                           square=not args.no_crop, force_rotate=args.rotate)
         print(f"{n} frames extraídos de {video.name} (extract_stride {args.extract_stride}, "
               f"max {args.max_side}px, {'recorte cuadrado centrado' if not args.no_crop else 'SIN recorte'})")
         first = cv2.imread(str(tmp / "00000.jpg"))
-        clicks = collect_clicks(first)
+        if args.points:
+            fh, fw = first.shape[:2]
+            clicks = parse_points(args.points, fw, fh)
+            print(f"  [pts] modo no interactivo: " +
+                  ", ".join(f"clase {c}: {len(p[0])} pts" for c, p in sorted(clicks.items())))
+        else:
+            clicks = collect_clicks(first)
         print(f"Propagando clases {sorted(clicks.keys())} con SAM2 ({n} frames)…")
         per_frame = propagate(tmp, clicks, args.checkpoint, args.config, device)
 
