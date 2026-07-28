@@ -19,3 +19,5 @@ training/*.pt
 training/*.onnx
 training/*.meta.json
 training/preview.html
+models/foot_net_v0*
+training/*.pth

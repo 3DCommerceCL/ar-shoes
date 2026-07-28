@@ -116,8 +116,9 @@ class FootDataset:
     Devuelve tensores torch: image (3,H,W), mask (H,W) long, heatmaps (6,64,64), kps (6,3)."""
 
     def __init__(self, samples, augment, img_size=IMG_SIZE):
-        import torch  # import diferido para permitir --smoke sin efectos colaterales
-        self._torch = torch
+        # NO guardar el módulo torch como atributo: en Windows los workers del DataLoader se
+        # crean por spawn y pickean el Dataset — un módulo no es serializable ("cannot pickle
+        # 'module' object"). Se importa dentro de __getitem__, que corre ya en el worker.
         self.samples = samples          # lista de dicts {img, mask, kps}
         self.img_size = img_size
         self.augment = augment
@@ -128,7 +129,7 @@ class FootDataset:
 
     def __getitem__(self, idx):
         import cv2
-        torch = self._torch
+        import torch
         s = self.samples[idx]
 
         # --- cargar imagen ---
@@ -479,7 +480,7 @@ def run(args):
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
 
-    best_miou = -1.0
+    best_score = -1.0
     for epoch in range(1, args.epochs + 1):
         model.train()
         tl = 0.0
@@ -515,15 +516,21 @@ def run(args):
               f"mIoU={miou:.3f} | IoU(pie∪zapato)={fs_iou:.3f} | PCK@0.1={pck:.3f} | "
               f"IoU/clase={[f'{v:.2f}' for v in ious]}")
 
-        if miou > best_miou:
-            best_miou = miou
+        # Selección del mejor checkpoint por IoU(pie∪zapato) — NO por mIoU: si una clase no
+        # aparece en el set de validación (p.ej. no hay piel visible), su unión es 0 y entra/sale
+        # del promedio según lo que prediga el modelo, dando saltos que no reflejan calidad real.
+        # Con keypoints entrenados se suma el PCK, que es lo que mide la pose.
+        score = fs_iou + (pck if pck_t > 0 else 0.0)
+        if score > best_score:
+            best_score = score
             torch.save({"model": model.state_dict(), "small": args.small,
                         "classes": NUM_CLASSES, "kp_names": KP_NAMES,
                         "mean": IMAGENET_MEAN, "std": IMAGENET_STD},
                        args.output)
-            print(f"  💾 Guardado (mIoU={miou:.3f}) → {args.output}")
+            print(f"  💾 Guardado (IoU pie∪zapato={fs_iou:.3f}"
+                  + (f", PCK={pck:.3f}" if pck_t > 0 else "") + f") → {args.output}")
 
-    print(f"\n✅ Mejor mIoU={best_miou:.3f} en {args.output}")
+    print(f"\n✅ Mejor score={best_score:.3f} en {args.output}")
 
 
 def build_argparser():
