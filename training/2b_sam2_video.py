@@ -302,6 +302,9 @@ def main():
                     help="config del checkpoint (t/s/b+/l deben coincidir)")
     ap.add_argument("--device", default=None, help="cuda|cpu (default: auto)")
     ap.add_argument("--review", action="store_true")
+    ap.add_argument("--dry_run", action="store_true",
+                    help="segmenta SÓLO el frame 0 y guarda un overlay para verificar los --points "
+                         "antes de gastar minutos propagando todo el clip")
     args = ap.parse_args()
 
     if args.review:
@@ -342,6 +345,34 @@ def main():
                             for k, p in sorted(clicks.items())))
         else:
             clicks = collect_clicks(first)
+        if args.dry_run:
+            # Sólo el frame 0: verificar que los puntos caen donde uno cree ANTES de propagar.
+            # (Los fallos vistos venían siempre de un punto mal ubicado: en el piso o en el pantalón.)
+            keep = {k: v for k, v in clicks.items() if (k[1] if isinstance(k, tuple) else 0) == 0}
+            for f in sorted(tmp.glob("*.jpg"))[1:]:
+                f.unlink()
+            per_frame = propagate(tmp, keep, args.checkpoint, args.config, device)
+            frame0 = cv2.imread(str(tmp / "00000.jpg"))
+            idx = compose_index_mask(per_frame.get(0, {}), frame0.shape[:2])
+            ov = frame0.copy()
+            for cls, colr in CLASS_COLORS.items():
+                ov[idx == cls] = (0.5 * np.array(colr) + 0.5 * ov[idx == cls]).astype(np.uint8)
+            h, w = frame0.shape[:2]
+            for key, (pts, lbs) in keep.items():
+                oid = key[0] if isinstance(key, tuple) else key
+                for (px, py), lb in zip(pts, lbs):
+                    c = CLASS_COLORS.get(oid // 100, (255, 255, 255)) if lb == 1 else (0, 0, 0)
+                    cv2.circle(ov, (int(px), int(py)), 7, c, -1)
+                    cv2.circle(ov, (int(px), int(py)), 7, (255, 255, 255), 2)
+            out_img = out_dir / f"_dryrun_{clip}.jpg"
+            cv2.imwrite(str(out_img), np.hstack([frame0, ov]), [cv2.IMWRITE_JPEG_QUALITY, 92])
+            print(f"  [dry-run] {out_img}")
+            for cls, nm in CLASS_NAMES.items():
+                print(f"     {nm:8} {100*float((idx==cls).mean()):5.1f}% del frame"
+                      + ("   ⚠ vacío: el punto no cayó donde creías" if (idx == cls).sum() < 50 else "")
+                      + ("   ⚠ enorme: agarró piso o ropa" if (idx == cls).mean() > 0.35 else ""))
+            return
+
         print(f"Propagando clases {sorted(clicks.keys())} con SAM2 ({n} frames)…")
         per_frame = propagate(tmp, clicks, args.checkpoint, args.config, device)
 

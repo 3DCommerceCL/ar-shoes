@@ -39,8 +39,12 @@ def parse_args():
     p.add_argument("--leg", default="models/leg.glb", help="pierna con piel → leg_bare")
     p.add_argument("--pants", default="models/pants.glb", help="pantalón → leg_pants")
     p.add_argument("--out", default="models/foot_rig.glb")
-    p.add_argument("--leg_max_z", type=float, default=0.34,
-                   help="recorta pierna/pantalón por encima de esta altura en metros (0 = no recortar)")
+    p.add_argument("--leg_max_z", type=float, default=0.22,
+                   help="recorta pierna/pantalón sobre esta altura en metros (0 = no recortar). "
+                        "22 cm es el valor MEDIDO: con la cámara colocada respecto al sujeto, la relación "
+                        "zapato/pierna en cuadro da 0.83 — la misma que en los videos reales del proyecto "
+                        "(sin recortar da 0.38: la pierna domina el cuadro y el modelo vería otra cosa). "
+                        "El GLB original NO se toca: el recorte vive sólo en el rig ensamblado.")
     return p.parse_args(argv)
 
 

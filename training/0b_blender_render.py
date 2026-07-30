@@ -52,10 +52,10 @@ KP_NAMES = ["heel", "toe", "ankle_in", "ankle_out", "ball", "toe_tip"]
 # La elevación se corta en 85°: mirando exactamente a plomo la cámara queda sobre el eje de la
 # pierna y hay que alejarla mucho para no atravesarla.
 CAMERA_CONFIGS = [
-    ("cenital",  0.35, (65, 85),  (0, 360),   0.42, 0.60),
-    ("diagonal", 0.35, (40, 65),  (0, 360),   0.34, 0.55),
-    ("frontal",  0.20, (15, 40),  (-40, 40),  0.34, 0.55),
-    ("lateral",  0.10, (20, 50),  (75, 105),  0.32, 0.50),
+    ("cenital",  0.35, (60, 82),  (0, 360),   0.30, 0.45),
+    ("diagonal", 0.35, (40, 62),  (0, 360),   0.26, 0.42),
+    ("frontal",  0.20, (15, 40),  (-40, 40),  0.26, 0.42),
+    ("lateral",  0.10, (20, 50),  (75, 105),  0.24, 0.38),
 ]
 
 FLOOR_COLORS = [
@@ -344,21 +344,31 @@ def place_camera(radius, rng, leg_top=None, leg_radius=None, aim_z=None):
     elev = math.radians(rng.uniform(*elev_r))
     azim = math.radians(rng.uniform(*azim_r))
     dist = rng.uniform(dmin, dmax)
-    if leg_top:
-        se, ce = math.sin(elev), max(math.cos(elev), 1e-3)
-        d_safe = min(leg_top / max(se, 1e-3), ((leg_radius or 0.08) + 0.03) / ce)
-        dist = max(dist, d_safe)
-    loc = Vector((dist * math.cos(elev) * math.sin(azim),
-                  dist * math.cos(elev) * math.cos(azim),
-                  dist * math.sin(elev)))
+
+    # La distancia se mide DESDE EL SUJETO, no desde el origen del mundo: el pie no está centrado
+    # en el origen (no lo movemos, para no romper el calce con los zapatos), así que colocar la
+    # cámara a "d del origen" daba encuadres erráticos — de 0.29 m a 0.61 m del pie según el azimut.
+    target = aim_z if aim_z is not None else Vector((0, 0, radius * 0.2))
+    d_hat = Vector((math.cos(elev) * math.sin(azim),
+                    math.cos(elev) * math.cos(azim),
+                    math.sin(elev)))
+
+    # Seguridad: la cámara no debe quedar DENTRO de la pierna (cilindro vertical en el eje Z del
+    # mundo). Basta con estar por encima de su tope O bien fuera de su radio. Se aleja hasta cumplir.
+    r_leg = (leg_radius or 0.08) + 0.04
+    for _ in range(24):
+        loc = target + d_hat * dist
+        if not leg_top:
+            break
+        if loc.z > leg_top or math.hypot(loc.x, loc.y) > r_leg:
+            break
+        dist *= 1.15
+    loc = target + d_hat * dist
     cam = bpy.data.objects.get("Camera")
     if cam is None:
         cam = bpy.data.objects.new("Camera", bpy.data.cameras.new("Camera"))
         bpy.context.scene.collection.objects.link(cam)
     cam.location = loc
-    # apuntar al SUJETO (centro del pie/zapato), no al origen del mundo: el pie no está centrado
-    # en el origen y si no se apunta ahí queda descentrado o fuera de cuadro.
-    target = aim_z if aim_z is not None else Vector((0, 0, radius * 0.2))
     cam.rotation_euler = (target - loc).to_track_quat('-Z', 'Y').to_euler()
     cam.data.lens = rng.uniform(24, 34)          # rango de un teléfono (~26 mm equiv.)
     cam.data.clip_start = 0.01                  # evita recortes en primeros planos
