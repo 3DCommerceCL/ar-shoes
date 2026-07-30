@@ -207,13 +207,22 @@ def main():
                 pf, pw = scene.cycles.pixel_filter_type, scene.cycles.filter_width
                 scene.cycles.pixel_filter_type = 'BOX'; scene.cycles.filter_width = 0.01
                 scene.cycles.samples = 1
+                # apagar TODA luz de mundo y lámparas: la máscara debe ser sólo emisión pura
                 bgn = scene.world.node_tree.nodes.get("Background")
                 if bgn:
                     bgn.inputs["Strength"].default_value = 0.0
+                    bgn.inputs["Color"].default_value = (0, 0, 0, 1)
+                for lo in [o for o in bpy.data.objects if o.type == 'LIGHT']:
+                    lo.hide_render = True
+                # IMPRESCINDIBLE: volver a PNG. np_save() dejó el formato en JPEG y la máscara
+                # se guardaba comprimida (valores mezclados → clases equivocadas).
+                scene.render.image_settings.file_format = 'PNG'
                 rnd.set_color_management(scene, 'Raw')
                 scene.render.filepath = str(tmp)
                 bpy.ops.render.render(write_still=True)
                 mrgb = rnd.np_load(tmp, non_color=True)
+                if idx == 0:
+                    print(f"   [diag] RGB máscara: min={mrgb.min(axis=(0,1))} max={mrgb.max(axis=(0,1))}")
                 maxc = mrgb.max(axis=2)
                 im = np.where(maxc < 0.25, 0, mrgb.argmax(axis=2) + 1).astype(np.float32)
                 rnd.np_save(np.repeat((im / 255.0)[..., None], 3, axis=2),
@@ -225,6 +234,8 @@ def main():
                         for m in orig[o.name]:
                             o.data.materials.append(m)
                 scene.cycles.pixel_filter_type, scene.cycles.filter_width = pf, pw
+                for lo in [o for o in bpy.data.objects if o.type == 'LIGHT']:
+                    lo.hide_render = False
 
                 pct = {c: round(100 * float((im == c).mean()), 1) for c in (1, 2, 3)}
                 vis = sum(1 for k in kps if k[2] > 0)

@@ -39,12 +39,11 @@ def parse_args():
     p.add_argument("--leg", default="models/leg.glb", help="pierna con piel → leg_bare")
     p.add_argument("--pants", default="models/pants.glb", help="pantalón → leg_pants")
     p.add_argument("--out", default="models/foot_rig.glb")
-    p.add_argument("--leg_max_z", type=float, default=0.22,
-                   help="recorta pierna/pantalón sobre esta altura en metros (0 = no recortar). "
-                        "22 cm es el valor MEDIDO: con la cámara colocada respecto al sujeto, la relación "
-                        "zapato/pierna en cuadro da 0.83 — la misma que en los videos reales del proyecto "
-                        "(sin recortar da 0.38: la pierna domina el cuadro y el modelo vería otra cosa). "
-                        "El GLB original NO se toca: el recorte vive sólo en el rig ensamblado.")
+    p.add_argument("--leg_max_z", type=float, default=0.0,
+                   help="recorta pierna/pantalón sobre esta altura en metros. 0 = NO recortar (default). "
+                        "Cortarlo deja el borde VISIBLE dentro del cuadro (un tubo cortado, irreal); es "
+                        "mejor que salga de cuadro por arriba. La fracción de pierna sube (~25-30%) pero "
+                        "sigue dentro del rango medido en los videos reales (10-32%).")
     return p.parse_args(argv)
 
 
@@ -110,20 +109,102 @@ def trim_above_z(obj, z_max):
         return 0.0
     top = max(zs)
     geom = list(bm.verts) + list(bm.edges) + list(bm.faces)
-    res = bmesh.ops.bisect_plane(bm, geom=geom, dist=1e-6,
-                                 plane_co=(0.0, 0.0, z_max), plane_no=(0.0, 0.0, 1.0),
-                                 clear_outer=True)
-    cut_edges = [e for e in res.get("geom_cut", []) if isinstance(e, bmesh.types.BMEdge)]
-    if cut_edges:
-        try:
-            bmesh.ops.holes_fill(bm, edges=cut_edges, sides=0)
-        except Exception:
-            bmesh.ops.edgeloop_fill(bm, edges=cut_edges)
+    bmesh.ops.bisect_plane(bm, geom=geom, dist=1e-6,
+                           plane_co=(0.0, 0.0, z_max), plane_no=(0.0, 0.0, 1.0),
+                           clear_outer=True)
+
+    def boundary():
+        return [e for e in bm.edges if len(e.link_faces) == 1
+                and all(abs(v.co.z - z_max) < 2e-3 for v in e.verts)]
+
+    def loops_of(edges):
+        """Separa las aristas de borde en bucles conectados."""
+        rest, out = set(edges), []
+        while rest:
+            e0 = rest.pop(); grp = [e0]; frontier = [e0]
+            while frontier:
+                e = frontier.pop()
+                for v in e.verts:
+                    for ne in v.link_edges:
+                        if ne in rest:
+                            rest.discard(ne); grp.append(ne); frontier.append(ne)
+            out.append(grp)
+        return out
+
+    bnd = boundary()
+    if bnd:
+        groups = loops_of(bnd)
+        # Tela con ESPESOR: el corte deja DOS bucles (pared externa e interna) → puentearlos
+        # produce el anillo correcto. holes_fill sobre dos bucles no cierra nada y quedaba el
+        # tubo abierto: se veía el interior hueco desde arriba.
+        if len(groups) == 2:
+            try:
+                bmesh.ops.bridge_loops(bm, edges=bnd)
+            except Exception:
+                pass
+        for op in (lambda es: bmesh.ops.holes_fill(bm, edges=es, sides=0),
+                   lambda es: bmesh.ops.edgeloop_fill(bm, edges=es),
+                   lambda es: bmesh.ops.contextual_create(bm, geom=es),
+                   lambda es: bmesh.ops.triangle_fill(bm, edges=es, use_beauty=True)):
+            rem = boundary()
+            if not rem:
+                break
+            try:
+                op(rem)
+            except Exception:
+                pass
+        left = len(boundary())
+        if left:
+            print(f"   ⚠ {obj.name}: quedaron {left} aristas abiertas tras el corte")
+
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     bm.transform(obj.matrix_world.inverted())
     bm.to_mesh(obj.data)
     obj.data.update()
     bm.free()
     return top
+
+
+def cap_open_top(obj, tol=0.004):
+    """Tapa la abertura SUPERIOR de la malla (si la tiene) usando el operador de Blender
+    (más robusto que bmesh.ops para mallas con espesor). Sin esto, el pantalón se ve hueco
+    por dentro en las tomas cenitales — parece un tubo cortado."""
+    import bmesh
+    bm = bmesh.new(); bm.from_mesh(obj.data)
+    zs = [v.co.z for v in bm.verts]
+    if not zs:
+        bm.free(); return 0
+    top_local = max(zs)
+    n_open = sum(1 for e in bm.edges if len(e.link_faces) == 1
+                 and all(abs(v.co.z - top_local) < tol for v in e.verts))
+    bm.free()
+    if not n_open:
+        return 0
+
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_mode(type='VERT')
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bm = bmesh.from_edit_mesh(obj.data)
+    for v in bm.verts:
+        v.select = abs(v.co.z - top_local) < tol
+    bm.select_flush(True)
+    bmesh.update_edit_mesh(obj.data)
+    try:
+        bpy.ops.mesh.edge_face_add()          # equivalente a apretar F: crea la cara/ngon
+    except Exception:
+        pass
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.normals_make_consistent(inside=False)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    bm = bmesh.new(); bm.from_mesh(obj.data)
+    left = sum(1 for e in bm.edges if len(e.link_faces) == 1
+               and all(abs(v.co.z - top_local) < tol for v in e.verts))
+    bm.free()
+    return n_open - left
 
 
 def apply_all(meshes):
@@ -268,6 +349,13 @@ def main():
             if top:
                 print(f"5b) {o.name}: recortado de {top*100:.0f} cm a {args.leg_max_z*100:.0f} cm")
         bpy.context.view_layer.update()
+    # Tapar la boca superior (venga del recorte o del modelado): si queda abierta se ve el
+    # interior hueco del pantalón en las tomas desde arriba.
+    for o in leg_objs + pants_objs:
+        n = cap_open_top(o)
+        if n:
+            print(f"5c) {o.name}: tapada la abertura superior ({n} aristas cerradas)")
+    bpy.context.view_layer.update()
 
     # ---------- 6) nombres ----------
     for i, o in enumerate(foot_meshes):
