@@ -45,19 +45,78 @@ MASK_COLORS = {CLASS_BG: (0, 0, 0), CLASS_LEG: (1, 0, 0), CLASS_FOOT: (0, 1, 0),
 # ---- Keypoints (mismo orden que train_model.py KP_NAMES) ----
 KP_NAMES = ["heel", "toe", "ankle_in", "ankle_out", "ball", "toe_tip"]
 
-# ---- Configuración de cámara: (nombre, prob, elev_deg, azim_deg, dist_factor×radio) ----
-# Distancias bajas → el sujeto llena ~40-60% del frame (el script viejo lo dejaba a ~20%, domain gap).
+# ---- Configuración de cámara: (nombre, prob, elev_deg, azim_deg, dist_min_m, dist_max_m) ----
+# Distancias ABSOLUTAS en metros, calibradas contra los videos reales del proyecto: ahí el zapato
+# ocupa 15-18% del frame (medido sobre las máscaras de SAM2 de clip01/02/03). Con distancias
+# proporcionales al radio el sujeto salía al 3% → domain gap grande.
+# La elevación se corta en 85°: mirando exactamente a plomo la cámara queda sobre el eje de la
+# pierna y hay que alejarla mucho para no atravesarla.
 CAMERA_CONFIGS = [
-    ("cenital",  0.40, (75, 90),  (0, 360),   1.3, 1.8),
-    ("diagonal", 0.30, (40, 75),  (0, 360),   1.5, 2.0),
-    ("frontal",  0.20, (15, 40),  (-30, 30),  1.7, 2.2),
-    ("lateral",  0.10, (20, 50),  (80, 100),  1.5, 1.9),
+    ("cenital",  0.35, (65, 85),  (0, 360),   0.42, 0.60),
+    ("diagonal", 0.35, (40, 65),  (0, 360),   0.34, 0.55),
+    ("frontal",  0.20, (15, 40),  (-40, 40),  0.34, 0.55),
+    ("lateral",  0.10, (20, 50),  (75, 105),  0.32, 0.50),
 ]
 
 FLOOR_COLORS = [
     (0.65, 0.50, 0.35), (0.35, 0.25, 0.15), (0.85, 0.85, 0.85), (0.50, 0.50, 0.50),
     (0.70, 0.60, 0.45), (0.20, 0.40, 0.20), (0.80, 0.75, 0.70), (0.15, 0.15, 0.15),
 ]
+
+# ---- Paletas para randomizar PIEL y PANTALÓN en cada render (domain randomization) ----
+# En sRGB (como se ven); se convierten a lineal para Blender. La piel se aplica al pie Y a
+# leg_bare con el MISMO tono (si no, el tobillo se vería de otro color que la pantorrilla).
+SKIN_SRGB = [
+    "#F7D9C4", "#EEBFA0", "#E0AC8B", "#D9A47A", "#C68642",
+    "#A9714B", "#8D5524", "#6B4226", "#503116", "#3A2214",
+]
+PANTS_SRGB = [
+    "#23324F", "#33486E", "#4C6A94", "#7B93B8", "#8FA8C8",   # jeans oscuro→claro
+    "#17181C", "#3A3D42", "#55585F", "#8A8D93",              # negro→gris
+    "#C9B48A", "#A08A5E", "#4A5340", "#2F3A2A",              # caqui / oliva
+    "#E3E0D8", "#B03A34", "#5A4632",                          # crema / rojo / marrón
+]
+
+
+def srgb_to_linear(c):
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def hex_to_linear(h, jitter=0.0, rng=None):
+    """'#RRGGBB' → tupla lineal para Blender, con variación multiplicativa opcional."""
+    h = h.lstrip("#")
+    rgb = [int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+    lin = [srgb_to_linear(v) for v in rgb]
+    if jitter and rng:
+        f = 1.0 + rng.uniform(-jitter, jitter)
+        lin = [max(0.0, min(1.0, v * f)) for v in lin]
+    return tuple(lin)
+
+
+def set_base_color(meshes, color, roughness=None):
+    """Pinta el Base Color (y opcionalmente Roughness) de todos los materiales de esas mallas."""
+    seen = set()
+    for o in meshes:
+        if o.type != 'MESH':
+            continue
+        for m in o.data.materials:
+            if not m or m.name in seen or not m.use_nodes:
+                continue
+            seen.add(m.name)
+            for n in m.node_tree.nodes:
+                if n.type == 'BSDF_PRINCIPLED':
+                    n.inputs["Base Color"].default_value = (*color, 1.0)
+                    if roughness is not None and "Roughness" in n.inputs:
+                        n.inputs["Roughness"].default_value = roughness
+
+
+def randomize_skin_and_fabric(foot_meshes, bare_meshes, pants_meshes, rng):
+    """Piel: un tono por render, el MISMO para pie y pierna desnuda. Pantalón: tono independiente."""
+    skin = hex_to_linear(rng.choice(SKIN_SRGB), jitter=0.10, rng=rng)
+    set_base_color(list(foot_meshes) + list(bare_meshes), skin, roughness=rng.uniform(0.45, 0.75))
+    fabric = hex_to_linear(rng.choice(PANTS_SRGB), jitter=0.12, rng=rng)
+    set_base_color(list(pants_meshes), fabric, roughness=rng.uniform(0.75, 0.95))
+    return skin, fabric
 
 
 # =====================================================================
@@ -97,6 +156,21 @@ def import_glb(path):
     before = set(bpy.data.objects)
     bpy.ops.import_scene.gltf(filepath=str(path))
     return [o for o in bpy.data.objects if o not in before]
+
+
+def mesh_world_bounds(objs):
+    """bbox mundial (min, max) de las mallas visibles; (None, None) si no hay ninguna."""
+    mn = Vector((1e9,) * 3); mx = Vector((-1e9,) * 3)
+    found = False
+    for o in objs:
+        if o.type != 'MESH' or o.hide_render:
+            continue
+        found = True
+        for v in o.bound_box:
+            wv = o.matrix_world @ Vector(v)
+            for i in range(3):
+                mn[i] = min(mn[i], wv[i]); mx[i] = max(mx[i], wv[i])
+    return (mn, mx) if found else (None, None)
 
 
 def mesh_world_radius(objs):
@@ -257,19 +331,23 @@ def make_floor(floor_paths, rng):
 # =====================================================================
 # CÁMARA
 # =====================================================================
-def place_camera(radius, rng, scene_radius=None):
-    """radius: radio del SUJETO (pie+zapato) → define el encuadre.
-    scene_radius: radio de TODO (incl. pierna) → piso mínimo de distancia para que la cámara
-    nunca quede por debajo del tope de la pierna (si no, en cenital la pierna pasa al lado de
-    la cámara y arruina el render). Verificado: pie radio 0.2 → cenital 0.26m, pero una pierna
-    a la rodilla llega a 0.52m."""
+def place_camera(radius, rng, leg_top=None, leg_radius=None, aim_z=None):
+    """Distancia ABSOLUTA en metros (ver CAMERA_CONFIGS), con una garantía geométrica: la cámara
+    nunca queda dentro de la pierna. Es seguro si está POR ENCIMA del tope de la pierna o bien
+    lo bastante afuera de su eje; alcanza cumplir la MENOS exigente de las dos:
+        d ≥ min( leg_top/sin(elev) , (leg_radius+3cm)/cos(elev) )
+    Así una toma diagonal puede acercarse mucho (la cámara pasa al costado de la pierna) y sólo
+    las casi-cenitales necesitan алejarse. Antes se exigía salir de la esfera de TODA la escena,
+    lo que empujaba la cámara a ~0.8 m y dejaba el zapato al 3% del frame."""
     cfg = rng.choices(CAMERA_CONFIGS, weights=[c[1] for c in CAMERA_CONFIGS])[0]
     name, _, elev_r, azim_r, dmin, dmax = cfg
     elev = math.radians(rng.uniform(*elev_r))
     azim = math.radians(rng.uniform(*azim_r))
-    dist = radius * rng.uniform(dmin, dmax)
-    if scene_radius:
-        dist = max(dist, scene_radius * 1.25)   # siempre fuera del bounding sphere de la escena
+    dist = rng.uniform(dmin, dmax)
+    if leg_top:
+        se, ce = math.sin(elev), max(math.cos(elev), 1e-3)
+        d_safe = min(leg_top / max(se, 1e-3), ((leg_radius or 0.08) + 0.03) / ce)
+        dist = max(dist, d_safe)
     loc = Vector((dist * math.cos(elev) * math.sin(azim),
                   dist * math.cos(elev) * math.cos(azim),
                   dist * math.sin(elev)))
@@ -278,8 +356,11 @@ def place_camera(radius, rng, scene_radius=None):
         cam = bpy.data.objects.new("Camera", bpy.data.cameras.new("Camera"))
         bpy.context.scene.collection.objects.link(cam)
     cam.location = loc
-    cam.rotation_euler = (Vector((0, 0, radius * 0.2)) - loc).to_track_quat('-Z', 'Y').to_euler()
-    cam.data.lens = rng.uniform(18, 35)
+    # apuntar al SUJETO (centro del pie/zapato), no al origen del mundo: el pie no está centrado
+    # en el origen y si no se apunta ahí queda descentrado o fuera de cuadro.
+    target = aim_z if aim_z is not None else Vector((0, 0, radius * 0.2))
+    cam.rotation_euler = (target - loc).to_track_quat('-Z', 'Y').to_euler()
+    cam.data.lens = rng.uniform(24, 34)          # rango de un teléfono (~26 mm equiv.)
     cam.data.clip_start = 0.01                  # evita recortes en primeros planos
     bpy.context.scene.camera = cam
     return name
@@ -379,13 +460,37 @@ def render_one(idx, scene, foot_objs, shoe_variants, leg_objs, root, kp_objs,
                 o.hide_render = (nm != legname)
         active_leg = leg_objs.get(legname, [])
 
+    # colores: tono de piel por render (mismo para pie y pierna desnuda) + tela del pantalón
+    bare_meshes = []
+    pants_meshes = []
+    if isinstance(leg_objs, dict):
+        for nm, objs in leg_objs.items():
+            (pants_meshes if "pants" in nm else bare_meshes).extend(objs)
+    skin, fabric = randomize_skin_and_fabric(foot_objs, bare_meshes, pants_meshes, rng)
+
     # transformar el conjunto (rotación Z aleatoria) SIN reescalar
     root.rotation_euler = Euler((0, 0, rng.uniform(0, 2 * math.pi)))
+    root.location.z = 0.0
     bpy.context.view_layer.update()
 
-    radius = mesh_world_radius(foot_objs + active_shoe)              # encuadre: sujeto
-    scene_radius = mesh_world_radius(foot_objs + active_shoe + list(active_leg))  # + pierna
-    angle_name = place_camera(radius, rng, scene_radius)
+    # CONTACTO CON EL PISO: levantar el conjunto para que la suela del zapato ACTIVO toque Z=0.
+    # Cada zapato tiene su grosor de suela, y el pie va por dentro (más arriba) — de ahí que esto
+    # se resuelva acá y no moviendo los GLB (eso rompería el calce hecho a mano en Blender).
+    visible = list(foot_objs) + list(active_shoe) + list(active_leg)
+    mn_all, mx_all = mesh_world_bounds(visible)
+    if mn_all is not None:
+        root.location.z = -mn_all.z
+        bpy.context.view_layer.update()
+        mn_all, mx_all = mesh_world_bounds(visible)
+
+    # encuadre: centro y radio del SUJETO (pie+zapato), y datos de la pierna para la seguridad
+    smn, smx = mesh_world_bounds(list(foot_objs) + list(active_shoe))
+    center = (smn + smx) / 2 if smn is not None else Vector((0, 0, 0))
+    radius = max((smx - smn)) / 2 if smn is not None else 0.2
+    lmn, lmx = mesh_world_bounds(list(active_leg))
+    leg_top = lmx.z if lmx is not None else None
+    leg_radius = (max(lmx.x - lmn.x, lmx.y - lmn.y) / 2) if lmn is not None else None
+    angle_name = place_camera(radius, rng, leg_top, leg_radius, aim_z=center)
 
     # --- COLOR ---
     if hdri_paths:
@@ -455,7 +560,9 @@ def render_one(idx, scene, foot_objs, shoe_variants, leg_objs, root, kp_objs,
     scene.cycles.filter_width = prev_width
 
     return {"file": f"synth_{idx:05d}.jpg", "kps": kps,
-            "angle": angle_name, "shoe": chosen_shoe}
+            "angle": angle_name, "shoe": chosen_shoe,
+            "leg": (legname if isinstance(leg_objs, dict) else None),
+            "skin": [round(c, 4) for c in skin], "fabric": [round(c, 4) for c in fabric]}
 
 
 # =====================================================================

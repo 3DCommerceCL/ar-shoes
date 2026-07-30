@@ -160,12 +160,18 @@ def main():
                "(¿los exportaste? ¿nombres exactos?)")
 
     # ---- 4. piernas ----
-    faltan = [n for n in LEG_CANON if n not in legs]
-    extras = [n for n in legs if n not in LEG_CANON]
-    if not faltan:
-        report("OK", "Variantes leg_*", f"las 3 canónicas presentes" + (f" + extras: {extras}" if extras else ""))
+    # Requisito real: una pierna con piel + al menos una con tela. Los TONOS se randomizan en el
+    # render (piel y pantalón, distinto en cada imagen), así que no hacen falta variantes de color
+    # horneadas en el GLB — basta leg_bare + leg_pants.
+    has_bare = "leg_bare" in legs
+    pants_variants = [n for n in legs if n.startswith("leg_pants")]
+    if has_bare and pants_variants:
+        report("OK", "Variantes leg_*", f"leg_bare + {len(pants_variants)} de tela: {pants_variants}")
+    elif not legs:
+        report("FAIL", "Variantes leg_*", "no hay ningún objeto leg_* (la máscara saldría sin pierna)")
     else:
-        report("FAIL", "Variantes leg_*", f"faltan: {', '.join(faltan)} (nombres de OBJETO exactos)")
+        falta = ("leg_bare (pierna con piel)" if not has_bare else "alguna leg_pants* (tela)")
+        report("FAIL", "Variantes leg_*", f"falta {falta}. Presentes: {sorted(legs)}")
     for name, group in legs.items():
         meshes = [m for m in group if m.type == 'MESH'] + \
                  [ch for o in group for ch in o.children_recursive if ch.type == 'MESH']
