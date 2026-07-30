@@ -1,0 +1,19 @@
+HDRIs — iluminación realista para los renders sintéticos
+=========================================================
+Dejá acá los archivos .hdr (o .exr). El render toma UNO al azar por imagen y lo rota
+en un ángulo aleatorio, así cada render tiene otra luz, otro color y otros reflejos.
+
+DÓNDE BAJARLOS
+  https://polyhaven.com/hdris   → licencia CC0 (uso comercial y ML sin restricciones)
+  Filtrá por categoría "Indoor". Descargá en formato HDR, resolución 2K (alcanza de sobra
+  y pesa ~10 MB; 4K/8K solo hacen los renders más lentos sin mejorar nada a 256px).
+
+QUÉ BAJAR (10-20 en total)
+  Interiores (la mayoría, ~70%): living, cocina, oficina, pasillo, dormitorio, baño,
+    estudio fotográfico, garage. Son el caso de uso real de la app.
+  Exteriores (~30%): vereda, patio, plaza, día nublado, atardecer.
+  Buscá VARIEDAD de intensidad: algunos muy iluminados, otros oscuros o con luz lateral
+  dura (esas sombras marcadas son las que más cuesta aprender).
+
+SIN ARCHIVOS ACÁ el render usa luces genéricas de reemplazo: funciona, pero transfiere
+peor al mundo real. Es la mejora más grande que queda pendiente para el domain gap.

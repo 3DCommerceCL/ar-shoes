@@ -21,3 +21,9 @@ training/*.meta.json
 training/preview.html
 models/foot_net_v0*
 training/*.pth
+training/hdri/*.hdr
+training/hdri/*.exr
+training/floor_textures/*.jpg
+training/floor_textures/*.png
+training/models/shoes/
+training/data_angles/

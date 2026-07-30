@@ -1,0 +1,18 @@
+TEXTURAS DE PISO — los suelos sobre los que se apoya el pie
+============================================================
+Dejá acá imágenes .jpg o .png del COLOR del piso (diffuse / albedo / base color).
+El render elige una al azar por imagen y le aplica escala y rotación aleatorias.
+
+DÓNDE BAJARLAS
+  https://polyhaven.com/textures  → categoría "Floor", licencia CC0. Bajá en 2K y usá
+  solo el archivo "_diff" (color); los mapas de normales/rugosidad no hacen falta.
+  También sirven FOTOS TUYAS de pisos reales sacadas de arriba (son incluso mejores).
+
+QUÉ BAJAR (10-20)
+  Madera clara y oscura, parquet, cerámica/porcelanato (varios tonos y con juntas
+  visibles), alfombra, cemento pulido, baldosa exterior, pasto, adoquín.
+  Ojo: los pisos de TUS videos son cerámica clara, terracota y madera — conviene cubrir
+  esos y además otros distintos, para que el modelo no dependa de tu casa.
+
+SIN ARCHIVOS ACÁ el render usa colores planos: el modelo puede aprender a detectar
+"zona lisa = piso" y fallar con pisos texturados reales.
