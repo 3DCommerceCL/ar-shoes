@@ -389,6 +389,16 @@ def main():
             cv2.imwrite(str(out_dir / "masks" / f"{name}.png"), idx)
             exported += 1
         print(f"✅ {exported} frames exportados a {out_dir}/ (stride {args.stride})")
+        # Regenerar el visor de este clip: si no, queda mostrando la corrida anterior y uno
+        # cree que el arreglo no funcionó (ya pasó dos veces).
+        try:
+            import subprocess
+            subprocess.run([sys.executable, str(Path(__file__).parent / "preview_masks.py"),
+                            "--data", str(out_dir), "--clip", clip],
+                           check=False, capture_output=True)
+            print(f"   Visor actualizado: {out_dir / 'preview' / 'index.html'}")
+        except Exception as e:
+            print(f"   (no pude regenerar el visor: {e})")
         print(f"   Control de calidad: python 2b_sam2_video.py --review --out {out_dir}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
