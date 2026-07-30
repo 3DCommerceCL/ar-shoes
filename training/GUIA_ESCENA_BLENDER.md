@@ -161,7 +161,23 @@ transfiere peor al mundo real).
 
 ---
 
-## 4. Verificar (antes de renderizar nada en serio)
+## 4. Validar tu GLB (automático — corré esto ANTES que nada)
+
+Cada vez que exportes `foot.glb`, corré el validador. Revisa todo el contrato de esta guía
+(escala, orientación, origen, los 6 Empties con sus posiciones anatómicas, el lado medial,
+las 3 variantes `leg_*`, mallas cerradas, materiales) y te dice exactamente qué corregir:
+
+```bash
+cd training
+"C:/Program Files/Blender Foundation/Blender 5.1/blender.exe" --background ^
+  --python validate_foot_glb.py -- --glb models/foot.glb
+```
+
+Salida tipo checklist con ✔/⚠/✖. Con `--render` genera además `validate_preview.jpg` con los
+keypoints proyectados sobre un render, para verificarlos a ojo. Exportá → validá → corregí →
+repetí hasta ver `✅ El GLB cumple el contrato`. Recién entonces pasá al preview de renders.
+
+## 5. Verificar los renders (antes de renderizar nada en serio)
 
 ```bash
 cd training
