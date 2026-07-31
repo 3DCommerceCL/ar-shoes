@@ -1,178 +1,172 @@
-// Detección de pies via sustracción de fondo (background subtraction)
-// No requiere modelo ML — compara frame actual vs frame de referencia (piso vacío)
+// pose.js — detección de pie con NUESTRO modelo (FootNet ONNX), reemplaza a MediaPipe.
+//
+// El modelo devuelve dos cosas por frame:
+//   · seg: máscara 4 clases {fondo, pierna, pie, zapato}  ← entrenada con video real (SAM2)
+//   · heatmaps: 12 keypoints (6 por pie: heel, toe, ankle_in, ankle_out, ball, toe_tip)
+//
+// ESTRATEGIA DE DOS VÍAS (a propósito): los keypoints hoy sólo se entrenan con renders
+// sintéticos, así que pueden no transferir a fotos reales. La máscara sí tiene datos reales.
+// Por eso: si los keypoints vienen con confianza suficiente se usan (dan orientación anatómica
+// real, sin la ambigüedad de 180° del PCA); si no, se derivan los landmarks de la máscara del
+// zapato con centroide+PCA. Así el visor funciona igual mientras la cabeza de keypoints madura.
+import { initInference, runInference, getActiveEP, getMeta } from './inference.js';
 
-let bgCanvas = null, bgCtx = null;
-let bgData   = null; // ImageData del fondo capturado
-let cameraMoved = false; // true si el último frame sugiere que la cámara se movió
+const MODEL_URL = './models/foot_net_v0.onnx';   // fp32: en WASM es ~6x más rápido que int8 (medido)
+const KP_MIN_CONF = 0.35;      // confianza mínima del heatmap para fiarse del keypoint
+const MIN_SHOE_PX = 120;       // píxeles mínimos de zapato/pie para dar el frame por válido
+const INPUT = 256;
 
-// Recorte cuadrado centrado del video → evita la distorsión de estirar 16:9 a 256×256
-function cropParams(videoEl) {
-  const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
-  const size = Math.min(vw, vh);
-  return { sx: (vw - size) / 2, sy: (vh - size) / 2, size, vw, vh };
+let ready = false;
+let lastMode = 'none';
+
+export function getTrackerMode() { return lastMode; }
+export { getActiveEP };
+
+export async function initPose() {
+  const url = new URLSearchParams(location.search).get('model') || MODEL_URL;
+  const ep = await initInference(url, url.replace(/\.onnx$/, '.meta.json'));
+  ready = true;
+  console.log('[pose] FootNet listo:', url, '| EP:', ep);
 }
 
-// Remapea coords normalizadas del recorte al frame completo (renderer.js estira el frame entero)
-function toFrame(nx, ny, crop) {
-  if (!crop) return { x: nx, y: ny };
-  return { x: (crop.sx + nx * crop.size) / crop.vw, y: (crop.sy + ny * crop.size) / crop.vh };
-}
-
-function isCameraMoved() { return cameraMoved; }
-
-function initBgSubtraction() {
-  bgCanvas = document.createElement('canvas');
-  bgCanvas.width  = 256;
-  bgCanvas.height = 256;
-  bgCtx = bgCanvas.getContext('2d', { willReadFrequently: true });
-}
-
-// Captura el frame actual como referencia de fondo (piso sin pie)
-function captureBackground(videoEl) {
-  if (!bgCtx) initBgSubtraction();
-  const c = cropParams(videoEl);
-  bgCtx.drawImage(videoEl, c.sx, c.sy, c.size, c.size, 0, 0, 256, 256);
-  const raw = bgCtx.getImageData(0, 0, 256, 256).data;
-  bgData = new Uint8ClampedArray(raw); // copia independiente
-  console.log('[pose] Fondo capturado');
-  return true;
-}
-
-function hasBgData() {
-  return bgData !== null;
-}
-
-// Retorna máscara de diferencia: 0 = igual al fondo, 1 = muy diferente (= pie)
-function detectPose(videoEl) {
-  if (!bgData || !bgCtx || !videoEl.videoWidth) return null;
-
-  const c = cropParams(videoEl);
-  bgCtx.drawImage(videoEl, c.sx, c.sy, c.size, c.size, 0, 0, 256, 256);
-  const current = bgCtx.getImageData(0, 0, 256, 256).data;
-
-  const W = 256, H = 256;
-  const diff = new Float32Array(W * H);
-
-  // Detección de cámara movida: el tercio SUPERIOR (donde normalmente no hay pie)
-  // no debería diferir mucho del fondo; si cambia demasiado, la cámara se movió.
-  const topRows = Math.floor(H / 3);
-  let topChanged = 0;
-
-  for (let i = 0; i < W * H; i++) {
-    const r = Math.abs(current[i * 4]     - bgData[i * 4]);
-    const g = Math.abs(current[i * 4 + 1] - bgData[i * 4 + 1]);
-    const b = Math.abs(current[i * 4 + 2] - bgData[i * 4 + 2]);
-    const d = (r + g + b) / (255 * 3); // 0-1
-    diff[i] = d;
-    if (i < topRows * W && d > 0.10) topChanged++;
+// Devuelve el resultado crudo del modelo (o null). app.js lo pasa a extractFootLandmarks.
+export async function detectPose(videoEl) {
+  if (!ready || !videoEl.videoWidth) return null;
+  let r;
+  try {
+    r = await runInference(videoEl);
+  } catch (e) {
+    console.warn('[pose] inferencia falló:', e.message);
+    return null;
   }
-
-  cameraMoved = topChanged / (topRows * W) > 0.40;
-  if (cameraMoved) return null; // frame no fiable, no trackear
-
-  return { data: diff, width: W, height: H, crop: c };
+  // ¿hay pie/zapato suficiente en la máscara?
+  let n = 0;
+  for (let i = 0; i < r.seg.length; i++) if (r.seg[i] >= 2) n++;
+  r.shoePixels = n;
+  return n >= MIN_SHOE_PX ? r : null;
 }
 
-// Detecta qué pie (izquierdo/derecho) tiene más masa en la mitad inferior
-function detectDominantFoot(seg) {
-  if (!seg) return 'right';
-  const { data, width, height } = seg;
-  const midX = width / 2;
-  const yMin = Math.floor(height * 0.5);
-  let L = 0, R = 0;
+// Píxeles de zapato+pie del lado pedido, en coordenadas del recorte (0..INPUT)
+function maskPixels(seg, side) {
+  const pts = [];
+  for (let y = 0; y < INPUT; y++) {
+    for (let x = 0; x < INPUT; x++) {
+      if (seg[y * INPUT + x] >= 2) pts.push([x, y]);
+    }
+  }
+  if (pts.length < MIN_SHOE_PX) return pts;
+  // Con dos pies visibles, quedarse con la mitad correspondiente al lado pedido
+  const xs = pts.map(p => p[0]);
+  const midX = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const half = side === 'left' ? pts.filter(p => p[0] < midX) : pts.filter(p => p[0] >= midX);
+  return half.length >= MIN_SHOE_PX * 0.4 ? half : pts;
+}
 
-  for (let y = yMin; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (data[y * width + x] > 0.10) {
-        x < midX ? L++ : R++;
-      }
+// Landmarks desde la MÁSCARA (respaldo): centroide + eje principal por PCA + bbox
+function landmarksFromMask(seg, side, crop) {
+  const pts = maskPixels(seg, side);
+  if (pts.length < MIN_SHOE_PX * 0.4) return null;
+
+  let sx = 0, sy = 0;
+  for (const [x, y] of pts) { sx += x; sy += y; }
+  const cx = sx / pts.length, cy = sy / pts.length;
+
+  let cxx = 0, cxy = 0, cyy = 0, minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+  for (const [x, y] of pts) {
+    const dx = x - cx, dy = y - cy;
+    cxx += dx * dx; cxy += dx * dy; cyy += dy * dy;
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+  }
+  let angle = 0.5 * Math.atan2(2 * cxy, cxx - cyy);
+
+  // DESAMBIGUAR TALÓN/PUNTA con la máscara de PIERNA. El PCA da un eje sin sentido: el zapato
+  // podía aparecer dado vuelta 180° entre frames. Pero la pierna sale del TOBILLO, así que el
+  // extremo del pie más cercano a la pierna es el talón y el otro la punta. Es información que
+  // el modelo ya predice (IoU 0.97) y que la sustracción de fondo nunca tuvo.
+  let lx = 0, ly = 0, ln = 0;
+  for (let y = 0; y < INPUT; y++) {
+    for (let x = 0; x < INPUT; x++) {
+      if (seg[y * INPUT + x] === 1) { lx += x; ly += y; ln++; }
+    }
+  }
+  if (ln > 40) {
+    const legCx = lx / ln, legCy = ly / ln;
+    // si el eje +PCA apunta HACIA la pierna, invertirlo (queremos que apunte a la punta)
+    if (Math.cos(angle) * (legCx - cx) + Math.sin(angle) * (legCy - cy) > 0) {
+      angle += Math.PI;
+    }
+  }
+  const halfLen = Math.max(maxX - minX, maxY - minY) * 0.45;
+  const toFrame = (px, py) => ({
+    x: crop ? (crop.sx + (px / INPUT) * crop.s) / crop.w : px / INPUT,
+    y: crop ? (crop.sy + (py / INPUT) * crop.s) / crop.h : py / INPUT,
+    visibility: 1,
+  });
+  const fx = crop ? crop.s / crop.w : 1;
+  const fy = crop ? crop.s / crop.h : 1;
+  return {
+    heel:  toFrame(cx - Math.cos(angle) * halfLen, cy - Math.sin(angle) * halfLen),
+    toe:   toFrame(cx + Math.cos(angle) * halfLen, cy + Math.sin(angle) * halfLen),
+    ankle: toFrame(cx, cy),
+    bboxW: ((maxX - minX) / INPUT) * fx,
+    bboxH: ((maxY - minY) / INPUT) * fy,
+    side, source: 'mask',
+  };
+}
+
+// Landmarks desde los KEYPOINTS del modelo (preferido: anatómicos, sin ambigüedad de 180°)
+function landmarksFromKeypoints(byFoot, side) {
+  const block = byFoot?.[side];
+  if (!block) return null;
+  const [heel, toe, ankleIn, ankleOut, , toeTip] = block;
+  const conf = (heel[2] + toeTip[2] + ankleIn[2] + ankleOut[2]) / 4;
+  if (conf < KP_MIN_CONF) return null;
+
+  const ankle = { x: (ankleIn[0] + ankleOut[0]) / 2, y: (ankleIn[1] + ankleOut[1]) / 2, visibility: 1 };
+  const len = Math.hypot(toeTip[0] - heel[0], toeTip[1] - heel[1]);
+  return {
+    heel:  { x: heel[0], y: heel[1], visibility: 1 },
+    toe:   { x: toeTip[0], y: toeTip[1], visibility: 1 },
+    ankle,
+    // bbox aproximado desde el largo del pie (renderer.js lo usa para la escala)
+    bboxW: len, bboxH: len,
+    side, source: 'kp', conf,
+  };
+}
+
+export function extractFootLandmarks(seg, side = 'right') {
+  if (!seg) return null;
+  const kp = landmarksFromKeypoints(seg.byFoot, side);
+  if (kp) { lastMode = 'keypoints'; return kp; }
+  const mk = landmarksFromMask(seg.seg, side, seg.crop);
+  lastMode = mk ? 'mascara' : 'none';
+  return mk;
+}
+
+export function detectDominantFoot(seg) {
+  if (!seg) return 'right';
+  // 1) por confianza de keypoints, si la hay
+  if (seg.byFoot) {
+    const c = (b) => b.reduce((a, k) => a + k[2], 0) / b.length;
+    const l = c(seg.byFoot.left), r = c(seg.byFoot.right);
+    if (Math.max(l, r) >= KP_MIN_CONF) return l > r ? 'left' : 'right';
+  }
+  // 2) por masa de la máscara a cada lado
+  let L = 0, R = 0;
+  for (let y = 0; y < INPUT; y++) {
+    for (let x = 0; x < INPUT; x++) {
+      if (seg.seg[y * INPUT + x] >= 2) (x < INPUT / 2 ? L++ : R++);
     }
   }
   return L > R ? 'left' : 'right';
 }
 
-// Extrae heel/toe/ankle desde los píxeles que difieren del fondo
-function extractFootLandmarks(seg, side = 'right') {
+// La máscara de pierna/pantalón sirve de OCLUSOR (que el pantalón tape la caña del zapato).
+// Se expone para que renderer.js la use cuando se implemente la oclusión (Fase 5).
+export function getLegMask(seg) {
   if (!seg) return null;
-  const { data, width, height } = seg;
-
-  // Solo el 55% inferior del frame — pies siempre están abajo cuando cámara apunta al suelo
-  const yStart = Math.floor(height * 0.45);
-  const foreground = [];
-  for (let y = yStart; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (data[y * width + x] > 0.10) foreground.push([x, y]);
-    }
-  }
-  if (foreground.length < 100) return null;
-
-  // Tomar la mitad inferior del blob → zona de zapatos
-  const ys      = foreground.map(([, y]) => y);
-  const maxY    = Math.max(...ys);
-  const minY    = Math.min(...ys);
-  const yThresh = minY + (maxY - minY) * 0.65;
-  const footArea = foreground.filter(([, y]) => y >= yThresh);
-  if (footArea.length < 40) return null;
-
-  // Filtrar por lado
-  const xs   = footArea.map(([x]) => x);
-  const midX = (Math.min(...xs) + Math.max(...xs)) / 2;
-  const half = side === 'left'
-    ? footArea.filter(([x]) => x < midX)
-    : footArea.filter(([x]) => x >= midX);
-  const src = half.length >= 25 ? half : footArea;
-
-  return landmarksFromPixels(src, width, height, side, seg.crop);
+  const m = new Uint8Array(INPUT * INPUT);
+  for (let i = 0; i < m.length; i++) m[i] = seg.seg[i] === 1 ? 1 : 0;
+  return { data: m, width: INPUT, height: INPUT, crop: seg.crop };
 }
-
-// Calcula posición, orientación y tamaño del pie desde los píxeles detectados
-function landmarksFromPixels(pixels, width, height, side, crop) {
-  // Centroide
-  let sumX = 0, sumY = 0;
-  for (const [x, y] of pixels) { sumX += x; sumY += y; }
-  const cx = sumX / pixels.length;
-  const cy = sumY / pixels.length;
-
-  // Bounding box
-  let minX = Infinity, maxX = -Infinity, minY2 = Infinity, maxY2 = -Infinity;
-  for (const [x, y] of pixels) {
-    if (x < minX) minX = x; if (x > maxX) maxX = x;
-    if (y < minY2) minY2 = y; if (y > maxY2) maxY2 = y;
-  }
-  const bboxW = maxX - minX;
-  const bboxH = maxY2 - minY2;
-
-  // PCA para ángulo de orientación
-  let cxx = 0, cxy = 0, cyy = 0;
-  for (const [x, y] of pixels) {
-    const dx = x - cx, dy = y - cy;
-    cxx += dx * dx; cxy += dx * dy; cyy += dy * dy;
-  }
-  const angle = 0.5 * Math.atan2(2 * cxy, cxx - cyy);
-  const cos = Math.cos(angle), sin = Math.sin(angle);
-
-  // Heel y toe simétricos alrededor del centroide en la dirección PCA
-  const halfLen = Math.max(bboxW, bboxH) * 0.45;
-  const heel  = toFrame((cx - cos * halfLen) / width, (cy - sin * halfLen) / height, crop);
-  const toe   = toFrame((cx + cos * halfLen) / width, (cy + sin * halfLen) / height, crop);
-  const ankle = toFrame(cx / width,                   cy / height,                   crop);
-  // bbox como fracción del frame completo → consistente con la distancia heel-toe que usa renderer.js
-  const fx = crop ? crop.size / crop.vw : 1;
-  const fy = crop ? crop.size / crop.vh : 1;
-  return {
-    heel:  { ...heel,  visibility: 1 },
-    toe:   { ...toe,   visibility: 1 },
-    ankle: { ...ankle, visibility: 1 },
-    bboxW: (bboxW / width)  * fx,
-    bboxH: (bboxH / height) * fy,
-    side,
-  };
-}
-
-// initPose ahora es no-op (sin modelo ML)
-async function initPose() {
-  initBgSubtraction();
-  console.log('[pose] Sustracción de fondo lista');
-}
-
-export { initPose, detectPose, captureBackground, hasBgData, extractFootLandmarks, detectDominantFoot, isCameraMoved };

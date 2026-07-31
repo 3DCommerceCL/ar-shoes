@@ -55,9 +55,11 @@ KP_PER_FOOT   = len(KP_NAMES_ONE)
 SIDES         = ["left", "right"]   # orden de los bloques en el tensor: [left×6, right×6]
 KP_NAMES      = [f"{s}_{n}" for s in SIDES for n in KP_NAMES_ONE]
 NUM_KP        = len(KP_NAMES)       # 12
-HEATMAP_SIGMA = 2.0        # px (en resolución de heatmap)
+HEATMAP_SIGMA = 3.0        # px en el heatmap. Con 2.0 el pico ocupaba ~0.6% del mapa y
+                           # la MSE premiaba predecir todo cero (PCK 0.065 medido).
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
+POS_WEIGHT    = 30.0       # peso extra de los píxeles del pico en la pérdida de keypoints
 FROZEN_DIR    = "data_test_frozen"   # jamás debe entrar al entrenamiento (ver ROADMAP T3.6)
 
 
@@ -313,12 +315,16 @@ def combined_loss(seg_logits, kp_pred, mask, hm, has_kp=None, w_kp=10.0):
     import torch.nn.functional as F
     ce   = F.cross_entropy(seg_logits, mask)
     dice = dice_loss_multiclass(seg_logits, mask)
+    # MSE PONDERADA: en un heatmap gaussiano el 99% de los píxeles son 0, así que la MSE plana
+    # tiene su mínimo trivial en "predecir cero en todos lados" — que es exactamente lo que hizo
+    # el modelo (PCK 0.065). Pesando los píxeles del pico se le obliga a marcarlos.
+    w_pix = 1.0 + POS_WEIGHT * hm
     if has_kp is None:
-        mse = F.mse_loss(kp_pred, hm)
+        mse = (w_pix * (kp_pred - hm) ** 2).mean()
     else:
-        per_sample = ((kp_pred - hm) ** 2).mean(dim=(1, 2, 3))       # (B,)
-        w = has_kp.to(per_sample.dtype)
-        mse = (per_sample * w).sum() / w.sum().clamp(min=1e-6)
+        num = (w_pix * (kp_pred - hm) ** 2).mean(dim=(1, 2, 3))      # (B,)
+        w = has_kp.to(num.dtype)
+        mse = (num * w).sum() / w.sum().clamp(min=1e-6)
     return ce + dice + w_kp * mse, {"ce": ce.item(), "dice": dice.item(), "mse": mse.item()}
 
 
@@ -379,7 +385,21 @@ def _base_stem(stem):
     return re.sub(r"_f\d+$", "", stem)
 
 
-def load_samples(data_dir):
+def load_samples(data_dirs):
+    """Acepta una carpeta o varias: mezclar reales (sólo máscara) con sintéticos (máscara +
+    keypoints) es justamente lo que necesita el modelo — la segmentación aprende del dominio
+    real y los keypoints del sintético, que es el único que los tiene."""
+    if isinstance(data_dirs, (str, Path)):
+        data_dirs = [data_dirs]
+    out = []
+    for d in data_dirs:
+        got = _load_one(d)
+        print(f"  {d}: {len(got)} muestras, {sum(1 for s in got if s['kps'])} con keypoints")
+        out += got
+    return out
+
+
+def _load_one(data_dir):
     data_dir = Path(data_dir)
     if FROZEN_DIR in data_dir.parts:
         raise SystemExit(f"ABORT: {FROZEN_DIR} es el test set congelado y NO debe entrenarse (ROADMAP T3.6).")
@@ -535,11 +555,12 @@ def run(args):
 
 def build_argparser():
     p = argparse.ArgumentParser(description="Entrena FootNet (keypoints + segmentación multiclase)")
-    p.add_argument("--data_dir", default="data_synthetic")
+    p.add_argument("--data_dir", nargs="+", default=["data_synthetic"],
+                   help="una o varias carpetas (p.ej. datos reales + sintéticos)")
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--w_kp", type=float, default=10.0, help="peso de la pérdida de keypoints")
+    p.add_argument("--w_kp", type=float, default=30.0, help="peso de la pérdida de keypoints")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--small", action="store_true", help="MobileNetV2 alpha=0.5 (sin preentrenar)")
     p.add_argument("--output", default="foot_model.pth")

@@ -143,6 +143,28 @@ def parse_args():
 # =====================================================================
 # ESCENA
 # =====================================================================
+def enable_gpu(scene):
+    """Activa OPTIX (o CUDA) en Cycles. Sin esto renderiza en CPU y el lote tarda horas."""
+    prefs = bpy.context.preferences.addons['cycles'].preferences
+    prefs.refresh_devices()
+    for dt in ('OPTIX', 'CUDA'):
+        try:
+            prefs.compute_device_type = dt
+        except Exception:
+            continue
+        devs = [d for d in prefs.devices if d.type == dt]
+        if not devs:
+            continue
+        for d in prefs.devices:
+            d.use = (d.type == dt)          # sólo la GPU; sumar la CPU suele frenar en escenas chicas
+        scene.cycles.device = 'GPU'
+        print(f"  [gpu] Cycles en {dt}: {[d.name for d in devs]}")
+        return True
+    scene.cycles.device = 'CPU'
+    print("  [gpu] sin GPU disponible → CPU")
+    return False
+
+
 def clear_scene():
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete(use_global=False)
@@ -353,17 +375,40 @@ def place_camera(radius, rng, leg_top=None, leg_radius=None, aim_z=None):
                     math.cos(elev) * math.cos(azim),
                     math.sin(elev)))
 
-    # Seguridad: la cámara no debe quedar DENTRO de la pierna (cilindro vertical en el eje Z del
-    # mundo). Basta con estar por encima de su tope O bien fuera de su radio. Se aleja hasta cumplir.
-    r_leg = (leg_radius or 0.08) + 0.04
-    for _ in range(24):
-        loc = target + d_hat * dist
+    # Seguridad: no basta con que la CÁMARA esté fuera de la pierna — la LÍNEA DE VISIÓN hacia el
+    # pie tampoco debe atravesarla. Mirando casi a plomo desde el lado del talón, la cámara queda
+    # por encima del tope de la pierna (pasaba el chequeo viejo) pero la pierna se interpone y el
+    # render sale con la pierna llenando el cuadro y el zapato invisible (~5% del lote anterior).
+    r_leg = (leg_radius or 0.08) + 0.035
+
+    def blocked(cam_pos):
         if not leg_top:
-            break
-        if loc.z > leg_top or math.hypot(loc.x, loc.y) > r_leg:
-            break
-        dist *= 1.15
+            return False
+        if math.hypot(cam_pos.x, cam_pos.y) < r_leg and 0 < cam_pos.z < leg_top:
+            return True                       # cámara dentro de la pierna
+        for t in [i / 24 for i in range(1, 24)]:       # muestreo del segmento cámara→sujeto
+            p = cam_pos.lerp(target, t)
+            if math.hypot(p.x, p.y) < r_leg and 0 < p.z < leg_top:
+                return True
+        return False
+
     loc = target + d_hat * dist
+    if blocked(loc):
+        # 1) probar otros azimuts (la pierna tapa sólo desde ciertos lados)
+        for _ in range(16):
+            azim = math.radians(rng.uniform(*azim_r) if azim_r[1] - azim_r[0] < 359
+                                else rng.uniform(0, 360))
+            d_hat = Vector((math.cos(elev) * math.sin(azim),
+                            math.cos(elev) * math.cos(azim), math.sin(elev)))
+            loc = target + d_hat * dist
+            if not blocked(loc):
+                break
+        # 2) si sigue tapado, bajar la elevación (rasante siempre ve el pie)
+        while blocked(loc) and elev > math.radians(12):
+            elev -= math.radians(6)
+            d_hat = Vector((math.cos(elev) * math.sin(azim),
+                            math.cos(elev) * math.cos(azim), math.sin(elev)))
+            loc = target + d_hat * dist
     cam = bpy.data.objects.get("Camera")
     if cam is None:
         cam = bpy.data.objects.new("Camera", bpy.data.cameras.new("Camera"))
@@ -615,6 +660,7 @@ def main():
 
     scene = bpy.context.scene
     scene.render.engine = 'CYCLES'
+    enable_gpu(scene)
     scene.render.resolution_percentage = 100
 
     hdri_paths = []

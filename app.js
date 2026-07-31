@@ -1,15 +1,15 @@
 // app.js — orquestador principal del loop AR
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { initPose, detectPose, captureBackground,
-         extractFootLandmarks, detectDominantFoot, isCameraMoved } from './pose.js';
+import { initPose, detectPose, extractFootLandmarks, detectDominantFoot,
+         getTrackerMode, getActiveEP } from './pose.js';
 import { createLandmarkFilters, applyFilters }      from './filter.js';
 import {
   initRenderer, loadShoeGLB, buildOccluder,
   updateShoeTransform, updateMask, renderFrame, setShoeOpacity,
 } from './renderer.js';
 
-const GLB_PATH  = './models/shoe.glb';
+const GLB_PATH  = './models/shoe_web.glb';
 const STATUS_EL = document.getElementById('status');
 
 let videoEl, canvasEl;
@@ -20,7 +20,8 @@ let noFootFrames   = 0;
 let firstDetected  = false;
 let sideCandidate      = null; // lado propuesto para el cambio con histéresis
 let sideCandidateCount = 0;
-const NO_FOOT_THRESHOLD = 20; // ~4s antes de ocultar zapato
+const NO_FOOT_THRESHOLD = 8;   // ciclos sin pie antes de ocultar el zapato
+const DETECT_INTERVAL_MS = 80; // el modelo tarda; no encolar inferencias
 const SIDE_SWITCH_FRAMES = 5;  // ciclos consecutivos para confirmar cambio de pie
 
 // ---- Bootstrap ----
@@ -44,42 +45,30 @@ async function init() {
   document.getElementById('slider-opacity').addEventListener('input', e => {
     setShoeOpacity(parseFloat(e.target.value));
   });
-  document.getElementById('btn-calibrate').addEventListener('click', onCalibrate);
   document.getElementById('btn-recalibrate').addEventListener('click', onRecalibrate);
 
-  // Ocultar loading, mostrar pantalla de calibración paso 1
+  // Sin calibración: el modelo detecta el pie directamente
   document.getElementById('loading-screen').style.display = 'none';
-  showStep(1);
-}
-
-// ---- Calibración ----
-function onCalibrate() {
-  captureBackground(videoEl);
   showStep(2);
-
-  // Iniciar loops
   isRunning = true;
   requestAnimationFrame(renderLoop);
   detectionLoop();
 }
 
 function onRecalibrate() {
-  isRunning    = false;
   firstDetected = false;
   filters = createLandmarkFilters(3, 30); // no arrastrar el estado del filtro tras recalibrar
   sideCandidate = null; sideCandidateCount = 0;
+  window._footManualOverride = false;
   updateShoeTransform(null);
-  setTimeout(() => {
-    isRunning = false;
-    showStep(1);
-  }, 100);
+  showStep(2);
 }
 
 function showStep(n) {
-  document.getElementById('step-1').style.display = n === 1 ? 'flex' : 'none';
-  document.getElementById('step-2').style.display = n === 2 ? 'flex' : 'none';
-  // El UI normal solo se ve en paso 2
-  document.getElementById('ui').style.display = n === 2 ? 'flex' : 'none';
+  const s2 = document.getElementById('step-2');
+  if (s2) s2.style.display = n === 2 ? 'flex' : 'none';
+  const ui = document.getElementById('ui');
+  if (ui) ui.style.display = 'flex';
 }
 
 // ---- Loop de render — 60fps ----
@@ -94,17 +83,15 @@ function renderLoop() {
 async function detectionLoop() {
   while (isRunning) {
     const now = performance.now();
-    const seg = detectPose(videoEl);
+    const seg = await detectPose(videoEl);
 
     if (!seg) {
       noFootFrames++;
       if (noFootFrames > NO_FOOT_THRESHOLD) {
-        setStatus(isCameraMoved()
-          ? 'La cámara se movió — reencuadra hacia el piso'
-          : 'Pon tu pie en la cámara ↓');
+        setStatus('Apuntá la cámara a tu pie ↓');
         updateShoeTransform(null);
       }
-      await sleep(200);
+      await sleep(DETECT_INTERVAL_MS);
       continue;
     }
 
@@ -128,10 +115,10 @@ async function detectionLoop() {
     if (!rawLms) {
       noFootFrames++;
       if (noFootFrames > NO_FOOT_THRESHOLD) {
-        setStatus('Pon tu pie en la cámara ↓');
+        setStatus('Apuntá la cámara a tu pie ↓');
         updateShoeTransform(null);
       }
-      await sleep(200);
+      await sleep(DETECT_INTERVAL_MS);
       continue;
     }
 
@@ -145,7 +132,7 @@ async function detectionLoop() {
       side: rawLms.side,
     };
 
-    setStatus(`Pie ${currentSide === 'right' ? 'derecho' : 'izquierdo'} detectado ✓`);
+    setStatus(`Pie ${currentSide === 'right' ? 'derecho' : 'izquierdo'} ✓  (${getTrackerMode()}, ${getActiveEP()})`);
 
     if (!firstDetected) {
       firstDetected = true;
@@ -154,7 +141,7 @@ async function detectionLoop() {
 
     updateShoeTransform(footLms, 1);
 
-    await sleep(200);
+    await sleep(DETECT_INTERVAL_MS);
   }
 }
 
