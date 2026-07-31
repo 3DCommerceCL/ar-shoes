@@ -42,7 +42,7 @@ from pathlib import Path
 import numpy as np
 
 try:  # consola Windows (cp1252) no imprime UTF-8 por defecto
-    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)  # ver el avance en vivo aunque se redirija
 except Exception:
     pass
 
@@ -532,7 +532,7 @@ def run(args):
         miou = float(np.nanmean(ious))
         fs_iou = stats["fs_inter"] / stats["fs_union"] if stats["fs_union"] > 0 else 0.0
         pck = pck_c / pck_t if pck_t > 0 else 0.0
-        print(f"Epoch {epoch:3d}/{args.epochs} | loss={tl/max(1,len(train_ld)):.4f} | "
+        print(flush=True) or print(f"Epoch {epoch:3d}/{args.epochs} | loss={tl/max(1,len(train_ld)):.4f} | "
               f"mIoU={miou:.3f} | IoU(pie∪zapato)={fs_iou:.3f} | PCK@0.1={pck:.3f} | "
               f"IoU/clase={[f'{v:.2f}' for v in ious]}")
 

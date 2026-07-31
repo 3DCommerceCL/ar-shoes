@@ -1,0 +1,49 @@
+{
+  "mean": [
+    0.485,
+    0.456,
+    0.406
+  ],
+  "std": [
+    0.229,
+    0.224,
+    0.225
+  ],
+  "input_size": 256,
+  "heatmap_size": 64,
+  "classes": [
+    "background",
+    "leg",
+    "foot",
+    "shoe"
+  ],
+  "keypoints": [
+    "left_heel",
+    "left_toe",
+    "left_ankle_in",
+    "left_ankle_out",
+    "left_ball",
+    "left_toe_tip",
+    "right_heel",
+    "right_toe",
+    "right_ankle_in",
+    "right_ankle_out",
+    "right_ball",
+    "right_toe_tip"
+  ],
+  "outputs": {
+    "seg": [
+      1,
+      4,
+      256,
+      256
+    ],
+    "heatmaps": [
+      1,
+      12,
+      64,
+      64
+    ]
+  },
+  "checkpoint": "foot_v2.pth"
+}

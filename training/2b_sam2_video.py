@@ -241,6 +241,31 @@ def propagate(frames_dir, clicks, checkpoint, config, device):
     return per_frame
 
 
+def check_drift(out_dir, clip, drop=False, ratio=0.5, min_area=1.0):
+    """Frames cuya área de zapato cae por debajo de `ratio` × la mediana del clip (o casi
+    desaparece) mientras la pierna crece: síntoma de que la propagación perdió el objeto."""
+    out_dir = Path(out_dir)
+    imgs = sorted((out_dir / "images").glob(f"{clip}_f*.jpg"))
+    if len(imgs) < 8:
+        return []
+    stats = []
+    for p in imgs:
+        m = cv2.imread(str(out_dir / "masks" / f"{p.stem}.png"), cv2.IMREAD_GRAYSCALE)
+        if m is None:
+            continue
+        stats.append((p, 100.0 * float((m == 3).mean()), 100.0 * float((m == 1).mean())))
+    if not stats:
+        return []
+    med_shoe = float(np.median([s[1] for s in stats]))
+    bad = [s for s in stats if s[1] < max(med_shoe * ratio, min_area) * (1 if med_shoe else 0)]
+    names = [s[0].stem for s in bad]
+    if drop:
+        for p, _, _ in bad:
+            p.unlink(missing_ok=True)
+            (out_dir / "masks" / f"{p.stem}.png").unlink(missing_ok=True)
+    return names
+
+
 def compose_index_mask(masks, shape):
     """masks: {obj_id: máscara}. Todas las instancias de una clase se funden en el mismo índice.
     Prioridad de pintado: pierna < pie < zapato (el zapato tapa al pie que tapa a la pierna)."""
@@ -302,6 +327,8 @@ def main():
                     help="config del checkpoint (t/s/b+/l deben coincidir)")
     ap.add_argument("--device", default=None, help="cuda|cpu (default: auto)")
     ap.add_argument("--review", action="store_true")
+    ap.add_argument("--drop_bad", action="store_true",
+                    help="descartar automáticamente los frames con deriva de máscara")
     ap.add_argument("--dry_run", action="store_true",
                     help="segmenta SÓLO el frame 0 y guarda un overlay para verificar los --points "
                          "antes de gastar minutos propagando todo el clip")
@@ -389,6 +416,19 @@ def main():
             cv2.imwrite(str(out_dir / "masks" / f"{name}.png"), idx)
             exported += 1
         print(f"✅ {exported} frames exportados a {out_dir}/ (stride {args.stride})")
+
+        # DETECCIÓN DE DERIVA: SAM2 puede ir perdiendo un objeto y que otra clase se lo coma
+        # (visto en clip05: la bota lejana terminó etiquetada como pantalón, de a poco). Se
+        # compara cada frame contra la MEDIANA del clip: una caída fuerte y sostenida del área
+        # de una clase es deriva, no movimiento. Con --drop_bad esos frames se descartan.
+        drifted = check_drift(out_dir, clip, drop=args.drop_bad)
+        if drifted:
+            extra = " (BORRADOS)" if args.drop_bad else ""
+            print(f"   ⚠ {len(drifted)} frames con deriva de máscara{extra}")
+            if not args.drop_bad:
+                muestra = ", ".join(drifted[:6]) + ("..." if len(drifted) > 6 else "")
+                print(f"     {muestra}")
+                print("     revisalos en el visor; para descartarlos: --drop_bad")
         # Regenerar el visor de este clip: si no, queda mostrando la corrida anterior y uno
         # cree que el arreglo no funcionó (ya pasó dos veces).
         try:

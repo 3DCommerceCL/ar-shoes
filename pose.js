@@ -11,7 +11,7 @@
 // zapato con centroide+PCA. Así el visor funciona igual mientras la cabeza de keypoints madura.
 import { initInference, runInference, getActiveEP, getMeta } from './inference.js';
 
-const MODEL_URL = './models/foot_net_v0.onnx';   // fp32: en WASM es ~6x más rápido que int8 (medido)
+const MODEL_URL = './models/foot_net_v2.onnx';   // fp32: en WASM es ~6x más rápido que int8 (medido)
 const KP_MIN_CONF = 0.35;      // confianza mínima del heatmap para fiarse del keypoint
 const MIN_SHOE_PX = 120;       // píxeles mínimos de zapato/pie para dar el frame por válido
 const INPUT = 256;
